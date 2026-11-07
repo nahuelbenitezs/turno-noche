@@ -26,6 +26,16 @@ describe('red', () => {
     a.l.onData!({ t: 'input', i: 'x' }); expect(h.inputs[1]).toBe(5);
     a.l.onClose!(); expect(h.inputs[1]).toBe(null);
   });
+  it('un toque corto se conserva hasta que el host lo lee, y solo una vez', () => {
+    const h = new HostSession(() => [1]); const a = fake(); h.add(a.l, 0);
+    a.l.onData!({ t: 'input', i: BTN.J }); a.l.onData!({ t: 'input', i: 0 });
+    expect(h.take(1)).toBe(BTN.J); expect(h.take(1)).toBe(0);
+  });
+  it('libera el lugar de quien dejó de mandar datos', () => {
+    const h = new HostSession(() => [1]); const a = fake(); h.add(a.l, 0);
+    h.reap(5000); expect(h.links.has(1)).toBe(true);
+    h.reap(9000); expect(h.links.has(1)).toBe(false); expect(h.take(1)).toBe(null);
+  });
   it('los códigos de sala son de 5 letras y se normalizan', () => {
     expect(makeRoomCode()).toMatch(/^[A-Z]{5}$/); expect(normalizeCode(' ab-cde9f')).toBe('ABCDE');
   });

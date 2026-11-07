@@ -12,14 +12,20 @@ export function decodeSnapshot(json: string): GameState { return JSON.parse(json
 
 /** Lado del host: reparte lugares y guarda el último botón de cada invitado. */
 export class HostSession {
-  links = new Map<number, Link>(); inputs: (number | null)[] = [null, null, null, null];
+  links = new Map<number, Link>(); inputs: (number | null)[] = [null, null, null, null]; private tapped = [0, 0, 0, 0]; private seen = [0, 0, 0, 0];
+  static clock = () => performance.now();
   constructor(public freeSlots: () => number[]) {}
-  add(link: Link) {
+  /** Botones de cada lugar desde la última lectura: un toque corto no se pierde aunque lleguen varios mensajes juntos. */
+  take(slot: number) { const i = this.inputs[slot]; if (i === null) return null; const v = i | this.tapped[slot]; this.tapped[slot] = 0; return v; }
+  /** Libera a quien dejó de mandar datos, porque cerrar una pestaña no siempre avisa. */
+  reap(now: number, timeout = 8000) { for (const [slot, l] of this.links) if (now - this.seen[slot] > timeout) { this.drop(slot); l.close(); } }
+  private drop(slot: number) { this.links.delete(slot); this.inputs[slot] = null; this.tapped[slot] = 0; }
+  add(link: Link, now = 0) {
     const slot = this.freeSlots().find(x => !this.links.has(x));
     if (slot === undefined) { link.send({ t: 'full' } satisfies Msg); setTimeout(() => link.close(), 200); return -1; }
-    this.links.set(slot, link); this.inputs[slot] = 0;
-    link.onData = (m: Msg) => { if (m?.t === 'input' && Number.isInteger(m.i)) this.inputs[slot] = m.i; };
-    link.onClose = () => { this.links.delete(slot); this.inputs[slot] = null; };
+    this.links.set(slot, link); this.inputs[slot] = 0; this.seen[slot] = now;
+    link.onData = (m: Msg) => { if (m?.t === 'input' && Number.isInteger(m.i)) { this.inputs[slot] = m.i; this.tapped[slot] |= m.i; this.seen[slot] = HostSession.clock(); } };
+    link.onClose = () => { if (this.links.get(slot) === link) this.drop(slot); };
     link.send({ t: 'hello', slot } satisfies Msg);
     return slot;
   }

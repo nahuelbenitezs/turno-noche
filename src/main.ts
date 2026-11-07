@@ -44,7 +44,7 @@ function inputs(): (number | null)[] {
   const canJoin = s.phase === 'select' || s.phase === 'play';
   const local = inp.slots(() => freeSlots().filter(i => !s.players[i].connected || !s.players[i].joined), canJoin && !botOn);
   if (botOn) { const n = Math.max(1, Math.min(4, +(q.get('bot') || 1) || 1)); return [0, 1, 2, 3].map(i => i < n ? (s.phase === 'select' ? (s.players[i].ready ? 0 : pickBits(i)) : botInput(s, i)) : null); }
-  if (session) for (let i = 0; i < 4; i++) if (session.links.has(i)) local[i] = session.inputs[i];
+  if (session) for (let i = 0; i < 4; i++) if (session.links.has(i)) local[i] = session.take(i);
   return local;
 }
 function tick() {
@@ -57,8 +57,10 @@ function tick() {
 let last = performance.now(), acc = 0; const STEP = 1000 / 60; const speed = Math.max(1, +(q.get('speed') || 1));
 let lastRaf = 0;
 function advance(now: number) {
-  acc = Math.min(acc + (now - last) * speed, 400 * speed); last = now;
-  let n = 0; while (acc >= STEP && n < 30 * speed) { tick(); acc -= STEP; n++; }
+  session?.reap(now);
+  if (mode === 'guest' && lastSnapT && now - lastSnapT > 10000) netDown = true;
+  acc = Math.min(acc + (now - last) * speed, 1200 * speed); last = now;
+  let n = 0; while (acc >= STEP && n < 80 * speed) { tick(); acc -= STEP; n++; }
 }
 // Con la pestaña en segundo plano el navegador frena la animación: la sala online no debe trabarse por eso.
 setInterval(() => { if (performance.now() - lastRaf > 120) advance(performance.now()); }, 50);
@@ -169,7 +171,7 @@ async function startHost() {
   menuView = 'creating';
   try {
     session = new HostSession(() => freeSlots().filter(i => !s.players[i].joined));
-    const h = await hostRoom(link => { const slot = session!.add(link); if (slot >= 0) link.send(encodeSnapshot(s)); });
+    const h = await hostRoom(link => { const slot = session!.add(link, performance.now()); if (slot >= 0) link.send(encodeSnapshot(s)); });
     roomCode = h.code; closeNet = h.close; mode = 'host';
   } catch { session = null; menuView = 'main'; errorMsg = 'No se pudo crear la sala. Revisá la conexión o jugá en esta pantalla.'; }
 }
