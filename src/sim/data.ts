@@ -1,6 +1,6 @@
 // Datos del juego: personajes, armas, enemigos e historia. Sin dependencias de navegador.
 export const W = 960, H = 540;
-export const BTN = { L: 1, R: 2, U: 4, D: 8, J: 16, S: 32, M: 64, X: 128, DASH: 256 } as const;
+export const BTN = { L: 1, R: 2, U: 4, D: 8, J: 16, S: 32, M: 64, X: 128, DASH: 256, G: 512 } as const;
 export const pickBits = (card: number) => (card + 1) << 16;
 export const pickOf = (input: number) => (input >> 16) - 1;
 
@@ -76,4 +76,4 @@ export const ENDING: StoryLine[] = [
   { who: 'Beto', text: 'Bueno. Me voy a dormir. Esta noche entro a las diez.' },
   { who: 'Yoli', text: 'Y yo tengo cuarenta pedidos atrasados. Cinco estrellas, ¿eh?' },
 ];
-export const BANTER = ['¡Eso!', '¡Dale!', '¡Vamo arriba!', '¡Fino!', '¡A la bolsa!', '¡Tremendo!', '¡Qué nivel!', '¡De locos!'];
+export const BANTER = ['¡Hora extra paga!', '¡Rechazá esta entrega!', '¡Amasado a domicilio!', '¡Eso va con receta!', '¡Reclamo resuelto!', '¡A la bolsa!', '¡Cinco estrellas!', '¡Se terminó el recreo!'];

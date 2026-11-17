@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BTN, CHARS, ENEMIES, WEAPONS, pickBits } from '../src/sim/data';
-import { GameState, createGame, damageEnemy, hurtPlayer, loadLevel, step, surfaceAt, teamScale } from '../src/sim/sim';
+import { Enemy, GameState, createGame, damageEnemy, hurtPlayer, loadLevel, step, surfaceAt, teamScale } from '../src/sim/sim';
 import { LEVELS } from '../src/sim/levels';
 import { botInput } from '../src/sim/bot';
 
@@ -162,5 +162,127 @@ describe('continuar', () => {
     run(s, 5, 0); const b = s.enemies.find(e => e.type === 'camion')!; b.hp = 100;
     s.lives = 0; s.players[0].iframes = 0; hurtPlayer(s, s.players[0], 999); run(s, 90, 0); run(s, 50, 0); run(s, 1, BTN.J); run(s, 10, 0);
     expect(s.enemies.find(e => e.type === 'camion')!.hp).toBeLessThanOrEqual(100);
+  });
+});
+
+
+const target = (s: GameState, x: number, hp = 500): Enemy => ({ id: s.nextId++, z: s.players[0].z, type: 'turret', x, y: 460, w: 40, h: 40, vx: 0, vy: 0, ground: true, hp, maxHp: hp, face: -1, t: 0, st: 0, cd: 9999, stun: 0, flash: 0, arena: false, swings: [0, 0, 0, 0], n: 0 });
+const isolate = (s: GameState) => { s.enemies = []; s.props = []; s.pickups = []; s.bullets = []; s.spawnIdx = LEVELS[s.levelIdx].spawns.length; s.hitstop = 0; };
+
+describe('equipo con personajes exclusivos', () => {
+  it('cuatro confirmaciones simultáneas no reservan el mismo personaje', () => {
+    const s = createGame();
+    step(s, [pickBits(2), pickBits(2), pickBits(2), pickBits(2)]);
+    expect(s.players.filter(p => p.ready).map(p => p.cursor)).toEqual([2]);
+    expect(s.events.filter(e => e.k === 'pickblocked')).toHaveLength(3);
+    step(s, [0, pickBits(0), pickBits(1), pickBits(3)]);
+    for (let i = 0; i < 60; i++) step(s, [0, 0, 0, 0]);
+    expect(s.phase).toBe('story');
+    expect(new Set(s.players.map(p => p.char)).size).toBe(4);
+  });
+  it('la navegación saltea personajes confirmados y liberar la elección permite usarlos', () => {
+    const s = createGame(); step(s, [pickBits(0), 0, null, null]);
+    step(s, [0, BTN.L, null, null]); expect(s.players[1].cursor).toBe(3);
+    step(s, [BTN.M, 0, null, null]);
+    step(s, [0, pickBits(0), null, null]);
+    expect(s.players[1].cursor).toBe(0); expect(s.players[1].ready).toBe(true);
+  });
+  it('rechaza una carta inexistente recibida de la red', () => {
+    const s = createGame(); step(s, [pickBits(15), null, null, null]);
+    expect(s.players[0].ready).toBe(false); expect(s.players[0].cursor).toBeLessThan(4);
+  });
+  it('desconectarse de la selección libera la reserva antes de otras confirmaciones', () => {
+    const s = createGame(); step(s, [pickBits(0), pickBits(2), null, null]);
+    step(s, [BTN.M, null, null, null]); step(s, [pickBits(2), null, null, null]);
+    expect(s.players[0].cursor).toBe(2); expect(s.players[0].ready).toBe(true); expect(s.players[1].joined).toBe(false);
+  });
+  it('incorporarse a una partida y reconectar conserva un plantel único', () => {
+    const s = inPlay(2, [3, 1]); isolate(s); const previous = s.players[0].char;
+    step(s, [null, 0, 0, null]);
+    expect(new Set(s.players.filter(p => p.joined).map(p => p.char)).size).toBe(3);
+    step(s, [0, 0, 0, null]); expect(s.players[0].char).toBe(previous);
+  });
+  it('la sala espera explícitamente al anfitrión aunque todos estén listos', () => {
+    const s = createGame(); s.autoStart = false;
+    step(s, [pickBits(0), pickBits(1), null, null]);
+    for (let i = 0; i < 180; i++) step(s, [0, 0, null, null]);
+    expect(s.phase).toBe('select');
+    s.startRequested = true;
+    for (let i = 0; i < 60; i++) step(s, [0, 0, null, null]);
+    expect(s.phase).toBe('story'); expect(s.startRequested).toBe(false);
+  });
+});
+
+describe('arsenal y ritmo arcade', () => {
+  it('una granada explota por mecha, daña en área y no daña al equipo', () => {
+    const s = inPlay(2); isolate(s); const p = s.players[0], hp = s.players.map(p => p.hp);
+    const e = target(s, p.x + 370); s.enemies.push(e);
+    run(s, 70, BTN.G);
+    expect(p.grenades).toBe(2); expect(s.stats.grenades).toBe(1); expect(e.hp).toBeLessThan(500);
+    expect(s.players.map(p => p.hp)).toEqual(hp); expect(s.bullets.filter(b => b.kind === 'granada')).toHaveLength(0);
+  });
+  it('el stock de granadas se agota y se repone al cambiar de nivel', () => {
+    const s = inPlay(); isolate(s); const p = s.players[0];
+    for (let i = 0; i < 4; i++) { run(s, 1, BTN.G); run(s, 70, 0); }
+    expect(p.grenades).toBe(0); expect(s.stats.grenades).toBe(3);
+    loadLevel(s, 1); expect(p.grenades).toBe(3);
+  });
+  it('esquivar una bala inminente premia el timing y protege del daño', () => {
+    const s = inPlay(); isolate(s); const p = s.players[0]; p.iframes = 0; p.meter = 0;
+    s.bullets.push({ id: s.nextId++, z: p.z, x: p.x + 10, y: p.y - 25, vx: -5, vy: 0, dmg: 20, life: 90, kind: 'orbe', side: 1, owner: -1, pierce: false, grav: 0, r: 7, hits: [] });
+    const hp = p.hp; run(s, 5, BTN.DASH);
+    expect(s.stats.dodges).toBe(1); expect(p.meter).toBeGreaterThanOrEqual(25); expect(p.hp).toBe(hp);
+  });
+  it('el dash embiste y rompe la guardia sin golpear dos veces al mismo enemigo', () => {
+    const s = inPlay(); isolate(s); const p = s.players[0];
+    const e = target(s, p.x + 40); s.enemies.push(e);
+    run(s, 1, BTN.DASH); run(s, 15, 0);
+    expect(e.hp).toBeLessThan(500); expect(e.hp).toBeGreaterThan(470);
+  });
+  it('las bajas cargan un frenesí temporal que aumenta el daño y puntaje', () => {
+    const s = inPlay(); isolate(s); const p = s.players[0]; s.frenzyCharge = 98;
+    const e = target(s, p.x + 100, 1); s.enemies.push(e); damageEnemy(s, e, 5, 0, 0, p);
+    expect(s.frenzy).toBe(480); expect(s.events.some(e => e.k === 'frenzy')).toBe(true);
+    const other = target(s, p.x + 200); damageEnemy(s, other, 100, 0, 0, p); expect(other.hp).toBe(365);
+    run(s, 500, 0); expect(s.frenzy).toBe(0);
+  });
+  it('rescatar repone una granada para cada integrante del equipo', () => {
+    const s = inPlay(2); isolate(s); const p = s.players[0]; s.players.forEach(p => p.grenades = 0);
+    s.props.push({ id: s.nextId++, z: p.z, x: p.x + 35, y: p.y, w: 28, h: 50, vx: 0, vy: 0, ground: true, kind: 'prisoner', hp: 1, freed: 0 });
+    run(s, 20, BTN.S); expect(s.stats.rescued).toBe(1); expect(s.players.slice(0, 2).map(p => p.grenades)).toEqual([1, 1]);
+  });
+  it('detonar barriles encadenados suma una recompensa y no entra en recursión infinita', () => {
+    const s = inPlay(); isolate(s); const p = s.players[0];
+    s.props = [40, 120, 200].map(dx => ({ id: s.nextId++, z: p.z, x: p.x + dx, y: 460, w: 30, h: 42, vx: 0, vy: 0, ground: true, kind: 'barrel' as const, hp: 8, freed: 0 }));
+    run(s, 30, BTN.S); expect(s.stats.chains).toBeGreaterThanOrEqual(2); expect(s.props).toHaveLength(0); expect(s.score).toBeGreaterThanOrEqual(1250);
+  });
+  it('cada misión tiene peligros avisados y suministros en un carril alternativo', () => {
+    for (const lv of LEVELS) {
+      expect(lv.objective.length).toBeGreaterThan(20); expect(lv.hazards).toHaveLength(3);
+      for (const h of lv.hazards) { expect(h.period - h.on).toBeGreaterThan(55); expect(h.x + h.w).toBeLessThan(lv.width - 960); }
+      expect(lv.spawns.some(d => d.z !== undefined && d.k === 'pickup')).toBe(true);
+    }
+  });
+  it('el peligro daña el carril activo y permite evitarlo cambiando de carril', () => {
+    const s = inPlay(2); isolate(s); const [a, b] = s.players, h = LEVELS[0].hazards[0];
+    s.tick = h.period - h.offset - 1; s.camX = h.x - 250;
+    for (const p of [a, b]) { p.x = h.x + 30; p.y = 460; p.iframes = 0; }
+    a.z = h.z; b.z = h.z < 65 ? 125 : 5;
+    const hpA = a.hp, hpB = b.hp; step(s, [0, 0, null, null]);
+    expect(a.hp).toBe(hpA - h.dmg); expect(b.hp).toBe(hpB);
+  });
+});
+
+
+describe('puntos de control de misión', () => {
+  it('limpiar una arena guarda progreso y continuar vuelve allí con suministros', () => {
+    const s = inPlay(); isolate(s); const a = LEVELS[0].arenas[0];
+    s.camX = a.x; s.camLock = a.x; s.arenaIdx = 0; s.arenaOn = true; s.wave = a.waves.length - 1; s.players[0].x = a.x + 200;
+    step(s, [0, null, null, null]);
+    expect(s.checkpoint).toBe(1); expect(s.arenaIdx).toBe(1); expect(s.events.some(e => e.k === 'checkpoint')).toBe(true);
+    s.phase = 'gameover'; s.phaseT = 50; s.players[0].prev = 0; s.players[0].grenades = 0;
+    step(s, [BTN.J, null, null, null]);
+    expect(s.phase).toBe('play'); expect(s.checkpoint).toBe(1); expect(s.arenaIdx).toBe(1); expect(s.camX).toBe(a.x);
+    expect(s.players[0].grenades).toBe(3); expect(s.spawnIdx).toBeGreaterThan(0);
   });
 });

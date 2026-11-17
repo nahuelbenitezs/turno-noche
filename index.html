@@ -3,26 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<meta name="theme-color" content="#0b1030">
-<title>Turno Noche</title>
-<meta name="description" content="Acción de plataformas cooperativa para hasta 4 personas: laburantes del turno noche contra los alienígenas que se robaron el amanecer.">
+<meta name="theme-color" content="#0a1019">
+<title>Turno Noche · A fichar y repartir</title>
+<meta name="description" content="Un arcade cooperativo de 1 a 4 laburantes contra los alienígenas que se robaron el amanecer. Acción, granadas y horas extra. Jugá en PC o celular.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b1030'/><path d='M21 5a12 12 0 1 0 6 17A10 10 0 0 1 21 5z' fill='%23ffd23f'/></svg>">
 </head>
 <body>
+<div id="loading" role="status" aria-live="polite"><span class="loading-mark">TN</span><h2>Preparando el turno</h2><p>Cargando el barrio, el equipo y los problemas…</p><i class="loading-bar"></i></div>
 <div id="stage">
   <div id="hud" hidden></div>
   <div id="ui"></div>
   <div id="touch" hidden>
-    <div class="dpad"><i></i></div>
+    <div class="dpad" role="group" aria-label="Mover por el escenario"><i></i></div>
     <div class="btns">
-      <button data-btn="DASH" class="b dash" aria-label="Esquivar">≫</button>
-      <button data-btn="X" class="b sp" aria-label="Especial">★</button>
-      <button data-btn="M" class="b me" aria-label="Golpe">✊</button>
-      <button data-btn="S" class="b sh" aria-label="Disparar">🔫</button>
-      <button data-btn="J" class="b ju" aria-label="Saltar">⤒</button>
+      <button data-btn="DASH" class="b dash" aria-label="Esquivar y embestir"><strong>»</strong><span>Dash</span></button>
+      <button data-btn="G" class="b gr" aria-label="Lanzar granada"><strong>G</strong><span>Granada</span></button>
+      <button data-btn="X" class="b sp" aria-label="Especial"><strong>★</strong><span>Especial</span></button>
+      <button data-btn="M" class="b me" aria-label="Golpear"><strong>!</strong><span>Golpe</span></button>
+      <button data-btn="S" class="b sh" aria-label="Disparar"><strong>+</strong><span>Disparo</span></button>
+      <button data-btn="J" class="b ju" aria-label="Saltar"><strong>↑</strong><span>Salto</span></button>
     </div>
   </div>
+  <div id="toast" role="status" aria-live="polite"></div>
 </div>
+<div id="rotate-hint"><span>↻</span><strong>El turno se juega en horizontal</strong><p>Girás el celular y tenés más lugar para repartir.</p></div>
 <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

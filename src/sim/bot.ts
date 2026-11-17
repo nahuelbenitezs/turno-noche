@@ -31,8 +31,18 @@ function playInput(s: GameState, p: Player): number {
     if (push && Math.abs(dx) < 120 && s.tick % 16 < 2) i |= BTN.M;
     if (push && p.ground && s.tick % 40 < 2) i |= BTN.J;
     i |= BTN.S;
-  } else if (s.props.some(o => o.kind !== 'vehicle' && o.x - p.x < 300 && o.x > p.x)) i |= BTN.S;
+  } else {
+    const supply = s.pickups.find(k => Math.abs(k.x - p.x) < 220 && Math.abs(k.y - p.y) < 60);
+    const prop = s.props.find(o => o.kind !== 'vehicle' && !o.freed && o.x - p.x < 300 && o.x > p.x);
+    const target = downed ?? supply ?? prop;
+    if (target) { const dz = target.z - p.z; if (dz > 7) i |= BTN.D; else if (dz < -7) i |= BTN.U; }
+    if (prop) i |= BTN.S;
+  }
   if (p.meter >= 100 && foes.length > 2 && CHARS[p.char].id !== 'yoli') i |= BTN.X;
+  if (t && p.grenades > 0 && p.grenadeCd === 0 && Math.abs(t.x - p.x) > 140 && Math.abs(t.x - p.x) < 420 && s.tick % 90 < 2) i |= BTN.G;
+  if (s.bullets.some(b => b.side === 1 && Math.abs(b.z - p.z) < 25 && Math.abs(b.x - p.x) < 75) && p.dashCd === 0 && s.tick % 5 === 0) i |= BTN.DASH;
+  const danger = lv.hazards.find(h => p.x > h.x - 55 && p.x < h.x + h.w + 55 && Math.abs(p.z - h.z) < 40 && ((s.tick + h.offset) % h.period < h.on || (s.tick + h.offset) % h.period > h.period - 55));
+  if (danger) { i &= ~(BTN.U | BTN.D); i |= danger.z < 65 ? BTN.D : BTN.U; }
   // Saltar huecos, paredes y balas bajas
   const look = p.x + dir * 44;
   if (dir && p.ground) {

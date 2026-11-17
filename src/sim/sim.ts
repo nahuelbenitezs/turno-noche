@@ -14,24 +14,27 @@ export interface Player extends Body {
   meleeT: number; meleeStep: number; meleeWin: number; swing: number; dive: boolean;
   dashT: number; dashCd: number; jumpsLeft: number; coyote: number; jbuf: number; crouch: boolean; dropT: number;
   buf: number; meter: number; specialT: number; vehicle: number; prev: number; flash: number; kills: number; connected: boolean;
+  grenades: number; grenadeCd: number;
 }
-export interface Enemy extends Body { type: EnemyType; hp: number; maxHp: number; face: number; t: number; st: number; cd: number; stun: number; flash: number; arena: boolean; swings: number[]; n: number; dying?: number }
+export interface Enemy extends Body { type: EnemyType; hp: number; maxHp: number; face: number; t: number; st: number; cd: number; stun: number; flash: number; arena: boolean; swings: number[]; n: number; dying?: number; announced?: number }
 export interface Bullet { id: number; z: number; x: number; y: number; vx: number; vy: number; dmg: number; life: number; kind: string; side: 0 | 1; owner: number; pierce: boolean; grav: number; r: number; hits: number[] }
 export interface Prop extends Body { kind: 'crate' | 'barrel' | 'prisoner' | 'vehicle'; hp: number; drop?: WeaponId | 'food'; freed: number }
 export interface Pickup extends Body { drop: WeaponId | 'food'; life: number }
 export interface Ev { k: string; x: number; y: number; a?: number; s?: string }
 export type Phase = 'select' | 'story' | 'play' | 'clear' | 'gameover' | 'ending';
 export interface GameState {
+  autoStart: boolean; startRequested: boolean;
   tick: number; phase: Phase; phaseT: number; levelIdx: number; line: number; players: Player[]; enemies: Enemy[]; bullets: Bullet[]; props: Prop[]; pickups: Pickup[];
   camX: number; camLock: number; arenaIdx: number; wave: number; arenaOn: boolean; spawnIdx: number; bossId: number; clearT: number; lastHit: number; atBoss: boolean; bossKeep: number;
   lives: number; score: number; combo: number; comboT: number; hitstop: number; shake: number; slow: number; seed: number; nextId: number; events: Ev[];
-  stats: { kills: number; deaths: number; rescued: number; bestCombo: number; ticks: number };
+  frenzy: number; frenzyCharge: number; checkpoint: number; chain: number; chainT: number;
+  stats: { kills: number; deaths: number; rescued: number; bestCombo: number; ticks: number; grenades: number; parries: number; dodges: number; chains: number };
 }
 function newPlayer(slot: number): Player {
-  return { id: slot + 1, z: 30 + slot * 25, slot, joined: false, ready: false, cursor: slot, char: slot, face: 1, x: 0, y: 0, w: 28, h: 56, vx: 0, vy: 0, ground: false, hp: 100, maxHp: 100, iframes: 0, down: false, downT: 0, out: false, revive: 0, weapon: 'pistola', ammo: 0, shootCd: 0, ax: 1, ay: 0, shooting: 0, meleeT: 0, meleeStep: 0, meleeWin: 0, swing: 0, dive: false, dashT: 0, dashCd: 0, jumpsLeft: 0, coyote: 0, jbuf: 0, crouch: false, dropT: 0, buf: 0, meter: 50, specialT: 0, vehicle: 0, prev: 0, flash: 0, kills: 0, connected: false };
+  return { id: slot + 1, z: 30 + slot * 25, slot, joined: false, ready: false, cursor: slot, char: slot, face: 1, x: 0, y: 0, w: 28, h: 56, vx: 0, vy: 0, ground: false, hp: 100, maxHp: 100, iframes: 0, down: false, downT: 0, out: false, revive: 0, weapon: 'pistola', ammo: 0, shootCd: 0, ax: 1, ay: 0, shooting: 0, meleeT: 0, meleeStep: 0, meleeWin: 0, swing: 0, dive: false, dashT: 0, dashCd: 0, jumpsLeft: 0, coyote: 0, jbuf: 0, crouch: false, dropT: 0, buf: 0, meter: 50, specialT: 0, vehicle: 0, prev: 0, flash: 0, kills: 0, connected: false, grenades: 3, grenadeCd: 0 };
 }
 export function createGame(seed = 12345): GameState {
-  return { tick: 0, phase: 'select', phaseT: 0, levelIdx: 0, line: 0, players: [0, 1, 2, 3].map(newPlayer), enemies: [], bullets: [], props: [], pickups: [], camX: 0, camLock: 1e9, arenaIdx: 0, wave: 0, arenaOn: false, spawnIdx: 0, bossId: 0, clearT: 0, lastHit: 0, atBoss: false, bossKeep: 0, lives: 3, score: 0, combo: 0, comboT: 0, hitstop: 0, shake: 0, slow: 0, seed: seed >>> 0 || 1, nextId: 10, events: [], stats: { kills: 0, deaths: 0, rescued: 0, bestCombo: 0, ticks: 0 } };
+  return { autoStart: true, startRequested: false, tick: 0, phase: 'select', phaseT: 0, levelIdx: 0, line: 0, players: [0, 1, 2, 3].map(newPlayer), enemies: [], bullets: [], props: [], pickups: [], camX: 0, camLock: 1e9, arenaIdx: 0, wave: 0, arenaOn: false, spawnIdx: 0, bossId: 0, clearT: 0, lastHit: 0, atBoss: false, bossKeep: 0, lives: 3, score: 0, combo: 0, comboT: 0, hitstop: 0, shake: 0, slow: 0, seed: seed >>> 0 || 1, nextId: 10, events: [], frenzy: 0, frenzyCharge: 0, checkpoint: 0, chain: 0, chainT: 0, stats: { kills: 0, deaths: 0, rescued: 0, bestCombo: 0, ticks: 0, grenades: 0, parries: 0, dodges: 0, chains: 0 } };
 }
 export function rnd(s: GameState) { let x = s.seed; x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; s.seed = x; return x / 4294967296; }
 const emit = (s: GameState, k: string, x: number, y: number, a?: number, str?: string) => { s.events.push({ k, x, y: k === 'text' ? y : y + shotZ - 80, a, s: str }); };
@@ -78,12 +81,20 @@ function jumpToBoss(s: GameState) {
   const lv = level(s); s.arenaIdx = lv.arenas.length - 1; const a = lv.arenas[s.arenaIdx]; s.camX = a.x - 1; s.atBoss = true; s.spawnIdx = lv.spawns.findIndex(d => d.x > a.x + W + 80); if (s.spawnIdx < 0) s.spawnIdx = lv.spawns.length;
   active(s).forEach((p, i) => { spawnPlayerAt(s, p, a.x + 120 + i * 55); p.iframes = 120; });
 }
+function jumpToCheckpoint(s: GameState, checkpoint: number) {
+  const lv = level(s), previous = lv.arenas[checkpoint - 1];
+  if (!previous || previous.boss) return;
+  s.checkpoint = checkpoint; s.arenaIdx = checkpoint; s.camX = previous.x; s.spawnIdx = lv.spawns.findIndex(d => d.x > s.camX + 100);
+  if (s.spawnIdx < 0) s.spawnIdx = lv.spawns.length;
+  active(s).forEach((p, i) => spawnPlayerAt(s, p, s.camX + 130 + i * 55));
+}
 export function loadLevel(s: GameState, idx: number) {
   s.atBoss = false;
+  s.frenzy = 0; s.frenzyCharge = 0; s.checkpoint = 0; s.chain = 0; s.chainT = 0;
   s.levelIdx = idx; s.enemies = []; s.bullets = []; s.props = []; s.pickups = []; s.camX = 0; s.camLock = 1e9; s.arenaIdx = 0; s.wave = 0; s.arenaOn = false; s.spawnIdx = 0; s.bossId = 0; s.clearT = 0; s.hitstop = 0; s.slow = 0; s.comboT = 0; s.combo = 0;
-  active(s).forEach((p, i) => { spawnPlayerAt(s, p, 120 + i * 55); p.face = 1; p.iframes = 90; });
+  active(s).forEach((p, i) => { spawnPlayerAt(s, p, 120 + i * 55); p.face = 1; p.iframes = 90; p.grenades = 3; p.grenadeCd = 0; });
 }
-function setPhase(s: GameState, ph: Phase) { s.phase = ph; s.phaseT = 0; s.line = 0; emit(s, 'phase', 0, 0, 0, ph); }
+function setPhase(s: GameState, ph: Phase) { if (ph === 'story' || ph === 'select') s.startRequested = false; s.phase = ph; s.phaseT = 0; s.line = 0; emit(s, 'phase', 0, 0, 0, ph); }
 function confirmPressed(s: GameState, inputs: (number | null)[]) {
   let any = false;
   for (const p of s.players) { const i = inputs[p.slot]; if (i != null && (i & (BTN.J | BTN.S)) && !(p.prev & (BTN.J | BTN.S))) any = true; }
@@ -110,39 +121,56 @@ export function step(s: GameState, inputs: (number | null)[]) {
       }
       break;
     case 'gameover':
-      if (s.phaseT > 45 && confirmPressed(s, inputs)) { s.lives = 3; s.score = Math.floor(s.score / 2); const boss = s.enemies.find(e => e.id === s.bossId); if (boss) s.bossKeep = boss.hp; const again = s.atBoss; loadLevel(s, s.levelIdx); if (again) jumpToBoss(s); setPhase(s, 'play'); emit(s, 'levelstart', 0, 0); }
+      if (s.phaseT > 45 && confirmPressed(s, inputs)) { s.lives = 3; s.score = Math.floor(s.score / 2); const boss = s.enemies.find(e => e.id === s.bossId); if (boss) s.bossKeep = boss.hp; const again = s.atBoss, checkpoint = s.checkpoint; loadLevel(s, s.levelIdx); if (again) jumpToBoss(s); else if (checkpoint) jumpToCheckpoint(s, checkpoint); setPhase(s, 'play'); emit(s, 'levelstart', 0, 0); }
       break;
     case 'ending':
       if (s.phaseT > 12 && confirmPressed(s, inputs)) {
         s.line++; s.phaseT = 0;
-        if (s.line > ENDING.length) { const seed = s.seed; const fresh = createGame(seed); fresh.events = s.events; Object.assign(s, fresh); }
+        if (s.line > ENDING.length) { const seed = s.seed; const fresh = createGame(seed); fresh.events = s.events; fresh.autoStart = s.autoStart; Object.assign(s, fresh); }
       }
       break;
   }
   latch(s, inputs);
 }
+/** Las reservas se deciden en el host y en orden de slot: dos confirmaciones simultáneas nunca duplican personaje. */
 function stepSelect(s: GameState, inputs: (number | null)[]) {
+  for (const p of s.players) if (inputs[p.slot] == null) { p.joined = false; p.ready = false; }
+  const occupied = (p: Player, card: number) => s.players.some(o => o !== p && o.joined && o.ready && o.cursor === card);
+  const navigate = (p: Player, direction: number) => {
+    for (let n = 1; n <= CHARS.length; n++) {
+      const card = (p.cursor + direction * n + CHARS.length * 2) % CHARS.length;
+      if (!occupied(p, card)) { p.cursor = card; return; }
+    }
+  };
+  const confirm = (p: Player, card: number) => {
+    if (card < 0 || card >= CHARS.length || occupied(p, card)) { emit(s, 'pickblocked', W / 2, 160, p.slot, 'Ese personaje ya fichó. Elegí otro.'); return; }
+    p.cursor = card; p.ready = true; emit(s, 'confirm', 0, 0);
+  };
   for (const p of s.players) {
     const i = inputs[p.slot];
-    if (i == null) { p.joined = false; p.ready = false; continue; }
+    if (i == null) continue;
     const press = (b: number) => (i & b) && !(p.prev & b);
-    if (!p.joined) { p.joined = true; p.ready = false; const used = s.players.filter(o => o.joined && o !== p).map(o => o.cursor); let c = p.slot; while (used.includes(c) && used.length < 4) c = (c + 1) % 4; p.cursor = c; emit(s, 'ui', 0, 0); }
+    if (!p.joined) {
+      p.joined = true; p.ready = false; p.cursor = p.slot;
+      if (occupied(p, p.cursor)) navigate(p, 1);
+      emit(s, 'ui', 0, 0);
+    }
     const pick = pickOf(i);
-    if (pick >= 0 && !p.ready) { p.cursor = pick; p.ready = true; emit(s, 'confirm', 0, 0); continue; }
+    if (pick >= 0 && !p.ready) { confirm(p, pick); continue; }
     if (!p.ready) {
-      if (press(BTN.L)) { p.cursor = (p.cursor + 3) % 4; emit(s, 'ui', 0, 0); }
-      if (press(BTN.R)) { p.cursor = (p.cursor + 1) % 4; emit(s, 'ui', 0, 0); }
-      if (press(BTN.J) || press(BTN.S)) { p.ready = true; emit(s, 'confirm', 0, 0); }
-    } else if (press(BTN.M)) { p.ready = false; emit(s, 'ui', 0, 0); }
+      if (press(BTN.L)) { navigate(p, -1); emit(s, 'ui', 0, 0); }
+      if (press(BTN.R)) { navigate(p, 1); emit(s, 'ui', 0, 0); }
+      if (press(BTN.J) || press(BTN.S)) confirm(p, p.cursor);
+    } else if (press(BTN.M)) { p.ready = false; s.startRequested = false; emit(s, 'ui', 0, 0); }
   }
   const js = active(s);
-  if (js.length && js.every(p => p.ready)) {
+  if (js.length && js.every(p => p.ready) && (s.autoStart || s.startRequested)) {
     if (s.clearT++ > 50) {
       s.clearT = 0;
       for (const p of js) { p.char = p.cursor; setupPlayerChar(p); p.meter = 50; p.kills = 0; }
       s.lives = 2 + js.length; s.score = 0; s.levelIdx = 0; setPhase(s, 'story');
     }
-  } else s.clearT = 0;
+  } else { s.clearT = 0; if (!js.length || js.some(p => !p.ready)) s.startRequested = false; }
 }
 
 // ---------- Juego ----------
@@ -154,8 +182,10 @@ function stepPlay(s: GameState, inputs: (number | null)[]) {
   if (s.hitstop > 0) { s.hitstop--; hold(); return; }
   if (s.slow > 0) { s.slow--; if (s.slow % 3) { hold(); return; } }
   const lv = level(s);
+  if (s.frenzy > 0) s.frenzy--;
+  if (s.chainT > 0 && --s.chainT === 0) s.chain = 0;
   for (const p of s.players) {
-    if (!p.joined && inputs[p.slot] != null) { p.joined = true; const c = [0, 1, 2, 3].find(c => !s.players.some(o => o.joined && o !== p && o.char === c)) ?? 0; p.char = c; setupPlayerChar(p); p.meter = 50; spawnPlayerAt(s, p, s.camX + 200); }
+    if (!p.joined && inputs[p.slot] != null) { const c = [0, 1, 2, 3].find(c => !s.players.some(o => o.joined && o !== p && o.char === c)); if (c === undefined) continue; p.joined = true; p.char = c; p.cursor = c; setupPlayerChar(p); p.meter = 50; p.grenades = 3; spawnPlayerAt(s, p, s.camX + 200); }
     if (p.joined) stepPlayer(s, p, inputs[p.slot] ?? 0, lv);
   }
   updateCamera(s, lv);
@@ -165,6 +195,7 @@ function stepPlay(s: GameState, inputs: (number | null)[]) {
   stepBullets(s, lv);
   stepProps(s, lv);
   stepPickups(s, lv);
+  stepHazards(s, lv);
   s.enemies = s.enemies.filter(e => e.hp > 0 && e.x > s.camX - 500);
   if (s.comboT > 0 && --s.comboT === 0) s.combo = 0;
   // Fin de nivel y fin de partida
@@ -187,11 +218,12 @@ function runSpawns(s: GameState, lv: Level) {
   while (s.spawnIdx < lv.spawns.length && lv.spawns[s.spawnIdx].x < s.camX + W + 80) {
     const d = lv.spawns[s.spawnIdx++];
     const y = d.y ?? surfaceAt(lv, d.x) ?? 460;
-    if (d.k === 'e') spawnEnemy(s, d.type, d.x, y, false);
+    shotZ = d.z ?? 20 + rnd(s) * 90;
+    if (d.k === 'e') { const e = spawnEnemy(s, d.type, d.x, y, false); if (d.z !== undefined) e.z = d.z; }
     else if (d.k === 'pickup') dropPickup(s, d.x, y - 10, d.drop);
     else {
       const sz = d.k === 'vehicle' ? [80, 60] : d.k === 'prisoner' ? [28, 50] : d.k === 'barrel' ? [30, 42] : [40, 40];
-      s.props.push({ id: s.nextId++, z: 20 + rnd(s) * 90, x: d.x, y, w: sz[0], h: sz[1], vx: 0, vy: 0, ground: true, kind: d.k, hp: d.k === 'crate' ? 12 : d.k === 'barrel' ? 8 : d.k === 'vehicle' ? 120 : 1, drop: d.k === 'prisoner' ? d.drop : undefined, freed: 0 });
+      s.props.push({ id: s.nextId++, z: shotZ, x: d.x, y, w: sz[0], h: sz[1], vx: 0, vy: 0, ground: true, kind: d.k, hp: d.k === 'crate' ? 12 : d.k === 'barrel' ? 8 : d.k === 'vehicle' ? 120 : 1, drop: d.k === 'prisoner' ? d.drop : undefined, freed: 0 });
     }
   }
 }
@@ -203,14 +235,14 @@ function spawnEnemy(s: GameState, type: EnemyType, x: number, y: number, arena: 
 function runArena(s: GameState, lv: Level) {
   const a: Arena | undefined = lv.arenas[s.arenaIdx];
   if (!a) return;
-  if (!s.arenaOn) { if (s.camX >= a.x - (lv.autoScroll ? 0 : 200)) { s.camLock = a.x; } if (s.camX >= a.x - 2) { s.arenaOn = true; s.wave = 0; s.camX = a.x; spawnWave(s, a); if (a.boss) { s.atBoss = true; emit(s, 'bosswarn', 0, 0); } else emit(s, 'text', W / 2, 200, 0, '¡No pasa nadie!'); } return; }
+  if (!s.arenaOn) { if (s.camX >= a.x - (lv.autoScroll ? 0 : 200)) { s.camLock = a.x; } if (s.camX >= a.x - 2) { s.arenaOn = true; s.wave = 0; s.camX = a.x; spawnWave(s, a); if (a.boss) { s.atBoss = true; emit(s, 'bosswarn', 0, 0); } else emit(s, 'text', W / 2, 200, 0, a.label ?? '¡No pasa nadie!'); } return; }
   if (s.clearT > 0 || s.enemies.some(e => e.arena && e.hp > 0)) return;
   s.wave++;
   if (s.wave < a.waves.length) spawnWave(s, a);
   else if (a.boss && !s.bossId) {
     const d = ENEMIES[a.boss]; const b = spawnEnemy(s, a.boss, s.camX + W - 150, d.fly ? 260 : 460, true); s.bossId = b.id; if (s.bossKeep > 0) b.hp = Math.min(b.hp, s.bossKeep); if (a.boss === 'colmena') b.y = (surfaceAt(lv, b.x) ?? 460); emit(s, 'boss', b.x, b.y, 0, d.name);
     s.hitstop = 0; s.shake = 12;
-  } else if (!a.boss) { s.arenaOn = false; s.arenaIdx++; s.camLock = 1e9; emit(s, 'text', W / 2, 180, 0, '¡Sigan, sigan!'); }
+  } else if (!a.boss) { s.arenaOn = false; s.arenaIdx++; s.camLock = 1e9; s.checkpoint = s.arenaIdx; for (const p of living(s)) { p.hp = Math.min(p.maxHp, p.hp + p.maxHp * .2); p.grenades = Math.min(3, p.grenades + 1); } emit(s, 'checkpoint', W / 2, 180, 0, '¡Pausa del mate! Punto de control'); emit(s, 'text', W / 2, 180, 0, '¡Pausa del mate! Salud + granada'); }
 }
 function spawnWave(s: GameState, a: Arena) {
   a.waves[s.wave]?.forEach((w, i) => {
@@ -224,6 +256,7 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   const c = CHARS[p.char]; shotZ = p.z;
   const buf = p.buf; p.buf = 0;
   const has = (b: number) => !!(inp & b); const press = (b: number) => (!!(inp & b) && !(p.prev & b)) || !!(buf & b);
+  if (p.grenadeCd > 0) p.grenadeCd--;
   if (p.flash > 0) p.flash--; if (p.iframes > 0) p.iframes--; if (p.shootCd > 0) p.shootCd--; if (p.dashCd > 0) p.dashCd--; if (p.meleeWin > 0) p.meleeWin--; if (p.dropT > 0) p.dropT--; if (p.shooting > 0) p.shooting--;
   if (p.out) return;
   if (p.down) {
@@ -257,11 +290,20 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   }
   // Movimiento con aceleración: reacciona enseguida y derrapa un poco al frenar.
   const sp = p.vehicle ? 4.2 : c.speed; const accel = p.ground ? .9 : .55; const friction = p.ground ? .72 : .92;
-  if (p.dashT > 0) { p.dashT--; p.vx = p.face * 11; p.vy = Math.min(p.vy, 1); p.iframes = Math.max(p.iframes, 1); if (s.tick % 3 === 0) emit(s, 'dust', p.x, p.y); }
+  if (p.dashT > 0) {
+    p.dashT--; p.vx = p.face * 11; p.vy = Math.min(p.vy, 1); p.iframes = Math.max(p.iframes, 1);
+    for (const e of s.enemies) if (overlap(p, e) && e.swings[p.slot] !== p.swing) { e.swings[p.slot] = p.swing; if (!isBoss(e.type)) e.stun = Math.max(e.stun, 24); damageEnemy(s, e, c.meleeDmg * .7, p.face * 6, -3, p, true); }
+    if (s.tick % 3 === 0) emit(s, 'dust', p.x, p.y);
+  }
   else if (p.crouch) p.vx *= friction;
   else if (dirx && !(p.meleeT > 0 && p.ground)) { p.vx += dirx * accel; if (Math.abs(p.vx) > sp) p.vx = Math.sign(p.vx) * sp; }
   else p.vx *= friction;
-  if (press(BTN.DASH) && p.dashCd === 0 && !p.vehicle) { p.dashT = 10; p.dashCd = c.id === 'yoli' ? 20 : 42; p.meleeT = 0; emit(s, 'dash', p.x, p.y); }
+  if (press(BTN.DASH) && p.dashCd === 0 && !p.vehicle) {
+    p.dashT = 10; p.dashCd = c.id === 'yoli' ? 20 : 42; p.meleeT = 0; p.iframes = Math.max(p.iframes, 11); p.swing++;
+    const threat = s.bullets.some(b => b.side === 1 && Math.abs(b.z - p.z) < 25 && Math.abs(b.x - p.x) < 100 && b.y > p.y - p.h - 10 && b.y < p.y + 10 && (b.x - p.x) * b.vx < 0);
+    if (threat) { p.meter = Math.min(100, p.meter + 25); gainFrenzy(s, 18); s.stats.dodges++; emit(s, 'dodge', p.x, p.y - 40); }
+    emit(s, 'dash', p.x, p.y);
+  }
 
   // Salto con margen: "coyote time", buffer y altura variable.
   if (p.ground) { p.coyote = 7; p.jumpsLeft = c.jumps - 1; } else if (p.coyote > 0) p.coyote--;
@@ -282,6 +324,11 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
 
   // Disparo
   if (has(BTN.S) && p.shootCd === 0 && p.meleeT === 0) fire(s, p);
+  if (press(BTN.G) && p.grenades > 0 && p.grenadeCd === 0 && !p.vehicle) {
+    p.grenades--; p.grenadeCd = 40; s.stats.grenades++;
+    s.bullets.push({ id: s.nextId++, z: p.z, x: p.x + p.face * 22, y: p.y - 36, vx: p.face * 7.5, vy: -8.5, dmg: 75, life: 52, kind: 'granada', side: 0, owner: p.slot, pierce: false, grav: .34, r: 8, hits: [] });
+    emit(s, 'grenade', p.x, p.y - 36);
+  }
   // Cuerpo a cuerpo: combo de tres golpes y picada en el aire.
   if (p.meleeT > 0) {
     p.meleeT--;
@@ -310,7 +357,7 @@ function clampPlayer(s: GameState, p: Player, lv: Level) {
 }
 function fire(s: GameState, p: Player) {
   const id: WeaponId = p.vehicle ? 'canon' : p.weapon; const w = WEAPONS[id];
-  p.shootCd = w.cd; p.shooting = 10;
+  p.shootCd = Math.max(2, Math.round(w.cd * (s.frenzy > 0 ? .75 : 1))); p.shooting = 10;
   const a0 = Math.atan2(p.ay, p.ax); const mx = p.x + p.ax * (p.vehicle ? 44 : 26), my = p.y - p.h * .62 + p.ay * 22;
   for (let i = 0; i < w.count; i++) {
     const a = a0 + (w.count > 1 ? (i - (w.count - 1) / 2) * w.spread : (rnd(s) - .5) * w.spread * 2);
@@ -335,7 +382,7 @@ function meleeHit(s: GameState, p: Player, dmg: number, range: number) {
   // Devolver balas enemigas a golpes: da especial y se siente bárbaro.
   for (const b of s.bullets) if (b.side === 1 && b.kind !== 'wave' && Math.abs(b.z - box.z) < 34 && Math.abs(b.x - box.x) < box.w / 2 + b.r && b.y > box.y - box.h && b.y < box.y) {
     b.side = 0; b.owner = p.slot; b.vx = p.face * Math.max(9, Math.abs(b.vx) * 1.6); b.vy = -Math.abs(b.vy) * .1; b.dmg = 20; b.life = 60; b.grav = 0;
-    p.meter = Math.min(100, p.meter + 6); s.hitstop = Math.max(s.hitstop, 2); emit(s, 'parry', b.x, b.y);
+    p.meter = Math.min(100, p.meter + 6); s.hitstop = Math.max(s.hitstop, 2); s.stats.parries++; gainFrenzy(s, 8); emit(s, 'parry', b.x, b.y);
   }
   for (const o of s.props) if (o.hp > 0 && o.kind !== 'vehicle' && overlap(box, o)) damageProp(s, o, 99, p.slot);
 }
@@ -376,16 +423,23 @@ export function damageEnemy(s: GameState, e: Enemy, dmg: number, kx: number, ky:
   shotZ = e.z; s.lastHit = e.id;
   const boss = isBoss(e.type);
   if (e.stun > 0) dmg *= p && CHARS[p.char].id === 'beto' ? 2 : 1.4;
+  if (p && s.frenzy > 0) dmg *= 1.35;
   dmg = Math.round(dmg); e.hp -= dmg; e.flash = 6;
   if (!boss && e.type !== 'turret') { e.vx += kx; if (ky) { e.vy = ky; } }
   if (p) p.meter = Math.min(100, p.meter + dmg * (boss ? .06 : .18));
   emit(s, melee ? 'mhit' : 'hit', e.x, e.y - e.h / 2, dmg);
   if (e.hp <= 0) killEnemy(s, e, p);
 }
+function gainFrenzy(s: GameState, amount: number) {
+  if (s.frenzy > 0) return;
+  s.frenzyCharge = Math.min(100, s.frenzyCharge + amount);
+  if (s.frenzyCharge >= 100) { s.frenzyCharge = 0; s.frenzy = 480; emit(s, 'frenzy', W / 2, 160, 480, '¡HORAS EXTRA!'); }
+}
 function killEnemy(s: GameState, e: Enemy, p: Player | null) {
   e.hp = 0; const d = ENEMIES[e.type]; s.stats.kills++; if (p) p.kills++;
   s.combo++; s.comboT = 170; s.stats.bestCombo = Math.max(s.stats.bestCombo, s.combo);
-  s.score += d.score * Math.min(10, 1 + Math.floor(s.combo / 5));
+  s.score += d.score * Math.min(10, 1 + Math.floor(s.combo / 5)) * (s.frenzy > 0 ? 2 : 1);
+  gainFrenzy(s, 8 + Math.min(8, Math.floor(s.combo / 3)));
   emit(s, 'die', e.x, e.y - e.h / 2, e.face, e.type);
   if (s.combo % 10 === 0) emit(s, 'text', W / 2, 150, 0, BANTER[Math.floor(rnd(s) * BANTER.length)] + ` x${s.combo}`);
   if (e.type === 'exploder') explode(s, e.x, e.y - 16, 90, 25, 1, -1, false);
@@ -406,11 +460,15 @@ function explode(s: GameState, x: number, y: number, r: number, dmg: number, sid
 }
 function damageProp(s: GameState, o: Prop, dmg: number, owner: number) {
   shotZ = o.z;
-  if (o.kind === 'prisoner') { if (o.freed) return; o.freed = 1; s.stats.rescued++; s.score += 500; emit(s, 'rescue', o.x, o.y - 30); emit(s, 'text', o.x - s.camX, o.y - 80, 0, '¡Gracias, compañero!'); if (o.drop) dropPickup(s, o.x, o.y - 30, o.drop); return; }
+  if (o.kind === 'prisoner') { if (o.freed) return; o.freed = 1; s.stats.rescued++; s.score += 500; gainFrenzy(s, 18); for (const p of active(s)) { p.grenades = Math.min(3, p.grenades + 1); p.meter = Math.min(100, p.meter + 15); } emit(s, 'rescue', o.x, o.y - 30); emit(s, 'text', o.x - s.camX, o.y - 80, 0, '¡El sindicato invita! +1 granada'); if (o.drop) dropPickup(s, o.x, o.y - 30, o.drop); return; }
   o.hp -= dmg; emit(s, 'hit', o.x, o.y - 20, 1);
   if (o.hp <= 0) {
     o.hp = 0;
-    if (o.kind === 'barrel') explode(s, o.x, o.y - 20, 130, 60, 0, owner, true);
+    if (o.kind === 'barrel') {
+      s.chain++; s.chainT = 85;
+      if (s.chain >= 2) { s.score += 250 * s.chain; s.stats.chains++; gainFrenzy(s, 12); emit(s, 'chain', o.x, o.y - 60, s.chain, '¡Cadena de reclamos!'); }
+      explode(s, o.x, o.y - 20, 130, 60, 0, owner, true);
+    }
     else { emit(s, 'crate', o.x, o.y - 20); const r = rnd(s); dropPickup(s, o.x, o.y - 24, r < .45 ? 'food' : PICKUP_WEAPONS[Math.floor(rnd(s) * PICKUP_WEAPONS.length)]); }
   }
 }
@@ -433,6 +491,17 @@ function stepPickups(s: GameState, lv: Level) {
   }
   s.pickups = s.pickups.filter(k => k.life > 0 && k.x > s.camX - 100);
 }
+/** Peligros con un aviso de 55 cuadros. Saltar, cambiar de carril o esquivar permite cruzarlos. */
+function stepHazards(s: GameState, lv: Level) {
+  for (const h of lv.hazards) {
+    if (h.x > s.camX + W + 30 || h.x + h.w < s.camX) continue;
+    const phase = (s.tick + h.offset) % h.period;
+    if (phase >= h.on) continue;
+    for (const p of living(s)) if (p.x + p.w / 2 > h.x && p.x - p.w / 2 < h.x + h.w && Math.abs(p.z - h.z) < 27 && p.y > 425) {
+      shotZ = p.z; hurtPlayer(s, p, h.dmg);
+    }
+  }
+}
 function stepBullets(s: GameState, lv: Level) {
   for (const b of s.bullets) {
     shotZ = b.z;
@@ -441,6 +510,13 @@ function stepBullets(s: GameState, lv: Level) {
       if (best) { const a = Math.atan2(best.y - best.h / 2 - b.y, best.x - b.x); const sp = Math.hypot(b.vx, b.vy) || 9; b.vx += (Math.cos(a) * sp - b.vx) * .14; b.vy += (Math.sin(a) * sp - b.vy) * .14; }
     }
     b.vy += b.grav; b.x += b.vx; b.y += b.vy; b.life--;
+    if (b.kind === 'granada' && b.side === 0) {
+      const floor = surfaceAt(lv, b.x) ?? 460;
+      if (b.y >= floor - 7 && b.vy > 0) { b.y = floor - 7; b.vy *= -.45; b.vx *= .62; }
+      if (b.life <= 0) { explode(s, b.x, b.y - 8, 155, b.dmg, 0, b.owner, true); continue; }
+      if (b.x < s.camX - 80 || b.x > s.camX + W + 80) b.life = 0;
+      continue;
+    }
     if (b.kind === 'fuego') { b.vx *= .96; b.vy -= .06; }
     if (b.kind !== 'wave' && solidAt(lv, b.x, b.y)) { b.life = 0; if (b.kind === 'cohete' || b.kind === 'granada') explode(s, b.x, b.y - 6, b.kind === 'cohete' ? 100 : 70, b.dmg, b.side, b.owner, false); else emit(s, 'spark', b.x, b.y); continue; }
     if (b.kind === 'wave' && b.side === 1 && s.tick % 3 === 0) emit(s, 'dust', b.x, b.y + 14);
@@ -510,6 +586,12 @@ function ring(s: GameState, x: number, y: number, n: number, v: number, off = 0)
 function stepBoss(s: GameState, e: Enemy, tgt: Player, aim: number, lv: Level) {
   const L = s.camX + e.w / 2 + 20, Rr = s.camX + W - e.w / 2 - 20, cy = e.y - e.h / 2;
   const rage = e.hp < e.maxHp * .5; const fury = e.hp < e.maxHp * .2;
+  const phase = fury ? 3 : rage ? 2 : 1;
+  if (phase > (e.announced ?? 1)) {
+    e.announced = phase;
+    const taunt = e.type === 'gerenta' ? (fury ? '¡Esto afecta mi bono anual!' : '¡Se cancelan las vacaciones!') : e.type === 'camion' ? '¡Reciclaje sin clasificar!' : e.type === 'grua' ? '¡Izaje emocional!' : e.type === 'loco' ? '¡Próxima parada: traumatología!' : '¡El grupo se quedó sin admin!';
+    emit(s, 'bossphase', e.x, cy, phase, taunt); emit(s, 'text', W / 2, 155, phase, taunt);
+  }
   const next = (st: number) => { e.st = st; e.t = 0; };
   const add = (type: EnemyType, y?: number) => { if (s.enemies.filter(o => o.hp > 0).length < 5 + active(s).length) { const side = rnd(s) < .5; spawnEnemy(s, type, side ? s.camX - 30 : s.camX + W + 30, y ?? 300, false); } };
   switch (e.type) {

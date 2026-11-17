@@ -3,10 +3,19 @@ import { BossType, EnemyType, H, W, WeaponId } from './data';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export type SpawnKind = { k: 'e'; type: EnemyType } | { k: 'crate' } | { k: 'barrel' } | { k: 'prisoner'; drop: WeaponId | 'food' } | { k: 'vehicle' } | { k: 'pickup'; drop: WeaponId | 'food' };
-export type Spawn = SpawnKind & { x: number; y?: number };
+export type Spawn = SpawnKind & { x: number; y?: number; z?: number };
 export interface WaveEnemy { type: EnemyType; side: -1 | 1; y?: number }
-export interface Arena { x: number; waves: WaveEnemy[][]; boss?: BossType }
-export interface Level { name: string; sub: string; theme: number; width: number; solids: Rect[]; plats: Rect[]; spawns: Spawn[]; arenas: Arena[]; autoScroll: number }
+export interface Arena { x: number; waves: WaveEnemy[][]; boss?: BossType; label?: string }
+export interface Hazard { x: number; z: number; w: number; period: number; on: number; offset: number; dmg: number; label: string }
+export interface Level { name: string; sub: string; objective: string; theme: number; width: number; solids: Rect[]; plats: Rect[]; spawns: Spawn[]; arenas: Arena[]; hazards: Hazard[]; autoScroll: number }
+
+const MISSIONS = [
+  { objective: 'Rescatá al barrio y frená el camión que se llevó el amanecer.', hazard: '¡Vapor de la panadería!', weapon: 'metra' },
+  { objective: 'Abrí los contenedores de sol y desmantelá la Grúa Madre.', hazard: '¡Carga de alto voltaje!', weapon: 'escopeta' },
+  { objective: 'Subite al último tren. La cámara avanza: ¡no te quedes dormido!', hazard: '¡Fuga de vapor!', weapon: 'laser' },
+  { objective: 'Liberá a los técnicos y cortá la señal de la Antena Colmena.', hazard: '¡Antena en descarga!', weapon: 'cohete' },
+  { objective: 'Recuperá el sol y renunciá personalmente ante la Gerenta.', hazard: '¡Desvinculación láser!', weapon: 'fuego' },
+] as const;
 
 const GROUND = 460;
 class B {
@@ -16,7 +25,7 @@ class B {
   gap(len: number) { return this.g(len); }
   /** Plataforma atravesable; dx es relativo al inicio del último piso. */
   p(_dx: number, _y: number, _w: number) { return this; }
-  e(dx: number, type: EnemyType, y?: number) { void y; this.spawns.push({ k: 'e', type, x: this.s + dx }); return this; }
+  e(dx: number, type: EnemyType, y?: number) { this.spawns.push({ k: 'e', type, x: this.s + dx, y }); return this; }
   crate(dx: number) { this.spawns.push({ k: 'crate', x: this.s + dx }); return this; }
   barrel(dx: number) { this.spawns.push({ k: 'barrel', x: this.s + dx }); return this; }
   pow(dx: number, drop: WeaponId | 'food') { this.spawns.push({ k: 'prisoner', drop, x: this.s + dx }); return this; }
@@ -25,7 +34,15 @@ class B {
   arena(waves: WaveEnemy[][]) { this.arenas.push({ x: this.c - W + 60, waves }); return this; }
   boss(type: BossType, waves: WaveEnemy[][] = []) { this.g(W + 40); this.arenas.push({ x: this.c - W, waves, boss: type }); return this; }
   done(name: string, sub: string, theme: number, autoScroll = 0): Level {
-    return { name, sub, theme, autoScroll, width: this.c, solids: this.solids, plats: this.plats, spawns: this.spawns.sort((a, b) => a.x - b.x), arenas: this.arenas };
+    const mission = MISSIONS[theme], routeEnd = this.c - W - 120;
+    const hazards: Hazard[] = [.23, .52, .78].map((f, i) => ({ x: Math.round(routeEnd * f), z: i % 2 ? 100 : 25, w: theme === 4 ? 155 : 115, period: 260 - theme * 14, on: 48, offset: i * 83 + 60, dmg: 14 + theme * 2, label: mission.hazard }));
+    // Desvíos por el carril opuesto al peligro: son opcionales y premian explorar con suministros.
+    hazards.forEach((h, i) => {
+      this.spawns.push({ k: 'pickup', x: h.x - 65, z: h.z < 65 ? 117 : 12, drop: i === 1 ? 'food' : mission.weapon });
+      if (i === 2) this.spawns.push({ k: 'prisoner', x: h.x + 170, z: h.z < 65 ? 117 : 12, drop: mission.weapon });
+    });
+    this.arenas.forEach((a, i) => { a.label = a.boss ? '¡Fichó el supervisor!' : ['¡Reparto a las piñas!', '¡Inspección de contenedores!', '¡No se aceptan pasajeros!', '¡Asamblea en la antena!', '¡Reunión obligatoria!'][theme] + (i ? ' · segunda tanda' : ''); });
+    return { name, sub, objective: mission.objective, theme, autoScroll, width: this.c, solids: this.solids, plats: this.plats, spawns: this.spawns.sort((a, b) => a.x - b.x), arenas: this.arenas, hazards };
   }
 }
 const R = (type: EnemyType, y?: number): WaveEnemy => ({ type, side: 1, y });
