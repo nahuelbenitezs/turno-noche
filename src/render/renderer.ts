@@ -285,26 +285,86 @@ export class Renderer {
   private drawHazards(s: GameState) {
     const g = this.hazards.clear();
     const lv = LEVELS[this.levelDrawn];
+    for (const label of this.hazardLabels.values()) label.visible = false;
+    if (s.phase !== 'play') return;
+    const t = this.reducedMotion ? 0 : this.t;
+    const inView = (x: number, w: number) => x + w > this.camShown && x < this.camShown + W;
+    const colors = { steam: 0xb5f1ff, electric: 0x91ddff, obstacle: 0xffa272, signal: 0xc6aaff, laser: 0xff7aab };
     for (const [i, h] of lv.hazards.entries()) {
       const phase = (s.tick + h.offset) % h.period, on = phase < h.on;
-      const warn = phase >= h.period - 55;
-      const visible = s.phase === 'play' && h.x + h.w > this.camShown && h.x < this.camShown + W && (on || warn);
-      let label = this.hazardLabels.get(i);
-      if (!label) {
-        label = new Text({ text: h.label, style: { fontFamily: 'monospace', fontSize: 11, fontWeight: 'bold', fill: 0xffcd73, stroke: { color: 0x100c1f, width: 3 } } });
-        label.anchor.set(.5, 1); this.world.addChild(label); this.hazardLabels.set(i, label);
+      const warn = phase >= h.period - h.warn;
+      if ((!on && !warn) || !inView(h.x, h.w)) continue;
+      const { z, depth } = hazardZone(h, s.tick);
+      const y = 380 + z, strength = on ? 1 : (phase - h.period + h.warn) / h.warn;
+      const color = on ? 0xff765d : 0xffce71;
+      this.dangerFloor(h.x, y, h.w, depth / 2, color, strength, on);
+      this.dangerLabel(`hazard-${i}`, h.label, h.x + h.w / 2, y - depth / 2 - 6, color);
+      if (!on) continue;
+      const light = colors[h.kind];
+      if (h.kind === 'laser' || h.kind === 'obstacle') {
+        const beamY = y - h.height + 5;
+        g.moveTo(h.x, beamY).lineTo(h.x + h.w, beamY).stroke({ color: light, alpha: .28, width: 12 })
+          .moveTo(h.x, beamY).lineTo(h.x + h.w, beamY).stroke({ color: light, alpha: .92, width: 3 });
+        for (const x of [h.x, h.x + h.w]) {
+          g.moveTo(x, y + 8).lineTo(x, beamY).stroke({ color: 0x161729, width: 8 })
+            .circle(x, beamY, 4).fill(light);
+        }
+        continue;
       }
-      label.visible = visible;
-      if (!visible) continue;
-      const y = 380 + h.z, color = on ? 0xff583f : 0xffce71;
-      label.position.set(h.x + h.w / 2, y - 34); label.text = on ? `⚠ ${h.label}` : '¡OJO AL PISO!';
-      // Mismo alcance en profundidad que stepHazards: +/-27, también en los bordes.
-      g.roundRect(h.x, y - 27, h.w, 54, 5).fill({ color, alpha: on ? .18 : .06 }).stroke({ color, width: 1.5, alpha: on ? .8 : .45 + Math.sin(this.t * .15) * .25 });
-      for (let x = h.x + 8; x < h.x + h.w - 4; x += 22) g.moveTo(x, y + 16).lineTo(x + 10, y - 16).stroke({ color, width: 3, alpha: on ? .44 : .2 });
-      if (on && !this.reducedMotion) for (let n = 0; n < 3; n++) {
-        const x = h.x + ((this.t * 3 + n * h.w / 3) % h.w);
-        g.moveTo(x, y).lineTo(x + 3, y - 17).lineTo(x - 3, y - 25).stroke({ color: 0xffe4b0, alpha: .6, width: 1 });
+      for (let n = 0; n < (this.lowFx ? 3 : 6); n++) {
+        const f = (t * .025 + n * .173) % 1, x = h.x + h.w * ((n * .231 + .12) % 1);
+        if (h.kind === 'steam') {
+          g.ellipse(x + Math.sin(n + f * 4) * 11, y - f * 48, 6 + f * 23, 6 + f * 11)
+            .fill({ color: light, alpha: .12 * (1 - f) });
+        } else if (h.kind === 'electric') {
+          const top = h.height * (.55 + f * .5);
+          g.moveTo(x, y + 5).lineTo(x - 4, y - top / 2).lineTo(x + 6, y - top * .46).lineTo(x - 2, y - top)
+            .stroke({ color: light, width: 1.5, alpha: .85 });
+        } else {
+          g.ellipse(x, y - f * 14, 9 + f * 30, 3 + f * 8).stroke({ color: light, width: 2, alpha: .72 * (1 - f) });
+        }
       }
+    }
+    for (const e of s.enemies) {
+      const a = e.attack;
+      if (!a || e.hp <= 0) continue;
+      const { x, w, z, depth } = bossAttackBounds(a);
+      if (!inView(x, w)) continue;
+      const y = 380 + z, on = a.elapsed >= a.tell;
+      const strength = on ? 1 : Math.min(1, a.elapsed / a.tell);
+      const color = on ? 0xff6d5c : 0xffc66e;
+      if (a.kind === 'charge' || a.kind === 'slam' || a.kind === 'sweep') {
+        this.dangerFloor(x, y, w, depth, color, strength, on);
+        if (a.kind === 'charge' && !on) for (let x1 = Math.max(x + 20, this.camShown); x1 < x + w - 12; x1 += 52) {
+          g.moveTo(x1 - 7 * a.dir, y - 7).lineTo(x1 + 3 * a.dir, y).lineTo(x1 - 7 * a.dir, y + 7)
+            .stroke({ color, alpha: .88, width: 2 });
+        }
+        if (a.kind === 'slam' && !on) g.moveTo(a.x, y - 77).lineTo(a.x, y - 12).stroke({ color, alpha: .57, width: 2 });
+      } else {
+        const fill = on ? .18 : .08 + strength * .12;
+        g.ellipse(a.x, y, Math.min(w / 2, 48), Math.min(depth, 16)).fill({ color, alpha: fill })
+          .stroke({ color, width: 1.5, alpha: .74 });
+        g.moveTo(a.x - 7, y).lineTo(a.x + 7, y).moveTo(a.x, y - 7).lineTo(a.x, y + 7)
+          .stroke({ color, width: 1.5, alpha: .9 });
+      }
+      if (!on) this.dangerLabel('boss', a.label, Math.max(this.camShown + 130, Math.min(this.camShown + W - 130, a.x)), y - Math.min(depth, 35) - 8, color);
+    }
+  }
+  private dangerLabel(id: string, value: string, x: number, y: number, color: number) {
+    let label = this.hazardLabels.get(id);
+    if (!label) {
+      label = new Text({ text: '', style: { fontFamily: 'monospace', fontSize: 13, fontWeight: 'bold', stroke: { color: 0x100c1f, width: 4 } } });
+      label.anchor.set(.5, 1); this.world.addChild(label); this.hazardLabels.set(id, label);
+    }
+    label.visible = true; label.text = value.toLocaleUpperCase('es-UY'); label.style.fill = color; label.position.set(x, y);
+  }
+  private dangerFloor(x: number, y: number, w: number, depth: number, color: number, strength: number, on: boolean) {
+    const g = this.hazards;
+    g.roundRect(x, y - depth, w, depth * 2, 5).fill({ color, alpha: on ? .23 : .065 + strength * .07 })
+      .stroke({ color, width: on ? 2.5 : 1.5, alpha: on ? .95 : .52 + strength * .35 });
+    g.rect(x, y + depth - 4, w * strength, 3).fill({ color, alpha: on ? .87 : .66 });
+    for (let lx = x + 7; lx + 12 < x + w; lx += 26) {
+      g.moveTo(lx, y + depth - 6).lineTo(lx + 12, y - depth + 6).stroke({ color, width: 2, alpha: on ? .38 : .18 });
     }
   }
   draw(s: GameState) {

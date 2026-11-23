@@ -712,54 +712,212 @@ function stepEnemy(s: GameState, e: Enemy, lv: Level) {
   if (d.fly) { if (e.type === 'turret') { e.vx = 0; e.vy = 0; } else if (!boss) { e.x += e.vx; e.y += e.vy; } }
   else { e.vy = Math.min(e.vy + GRAV, MAXFALL); moveBody(e, lv); if (e.y > H + 100) { e.hp = 0; emit(s, 'die', e.x, H, 0, e.type); } }
 }
-function bossWave(s: GameState, e: Enemy, lv: Level, dir: number) { const y = (surfaceAt(lv, e.x) ?? 460) - 18; s.bullets.push({ z: shotZ, id: s.nextId++, x: e.x, y, vx: dir * 6, vy: 0, dmg: 14, life: 200, kind: 'wave', side: 1, owner: -1, pierce: true, grav: 0, r: 18, hits: [] }); }
-function ring(s: GameState, x: number, y: number, n: number, v: number, off = 0) { for (let i = 0; i < n; i++) eshot(s, x, y, off + i / n * Math.PI * 2, v, 12); }
-function stepBoss(s: GameState, e: Enemy, tgt: Player, aim: number, lv: Level) {
-  const L = s.camX + e.w / 2 + 20, Rr = s.camX + W - e.w / 2 - 20, cy = e.y - e.h / 2;
-  const rage = e.hp < e.maxHp * .5; const fury = e.hp < e.maxHp * .2;
-  const phase = fury ? 3 : rage ? 2 : 1;
+// Cada jefe prepara un movimiento, lo ejecuta y deja una ventana de recuperación.
+const BOSS_ROTATIONS: Record<BossType, BossPattern[][]> = {
+  camion: [['charge', 'mortar'], ['charge', 'mortar', 'charge', 'fan'], ['swarm', 'charge', 'mortar', 'charge']],
+  grua: [['slam', 'mortar'], ['mortar', 'slam', 'fan'], ['slam', 'mortar', 'swarm', 'slam']],
+  loco: [['sweep', 'fan'], ['fan', 'sweep', 'mortar'], ['sweep', 'ring', 'sweep', 'fan']],
+  colmena: [['ring', 'pulse'], ['swarm', 'pulse', 'ring'], ['pulse', 'ring', 'swarm', 'pulse']],
+  gerenta: [['fan', 'slam', 'ring'], ['sweep', 'ring', 'slam', 'swarm'], ['slam', 'sweep', 'mortar', 'ring', 'swarm', 'sweep']],
+};
+
+const PHASE_LINES: Record<BossType, [string, string]> = {
+  camion: ['¡Reciclaje sin clasificar!', '¡Prendió la compactadora!'],
+  grua: ['¡Carga fuera de control!', '¡Se soltó el contrapeso!'],
+  loco: ['¡A toda máquina!', '¡Se quedó sin frenos!'],
+  colmena: ['¡El grupo se quedó sin admin!', '¡Sobrecarga de la colmena!'],
+  gerenta: ['¡Se cancelan las vacaciones!', '¡Esto afecta mi bono anual!'],
+};
+
+const BOSS_MOVES: Record<BossPattern, Pick<BossAttack, 'kind' | 'label' | 'tell' | 'duration' | 'w' | 'depth'>> = {
+  charge: { kind: 'charge', label: 'Embestida de la compactadora', tell: 61, duration: 68, w: W - 20, depth: 58 },
+  slam: { kind: 'slam', label: 'Impacto en el piso', tell: 56, duration: 22, w: 230, depth: 96 },
+  sweep: { kind: 'sweep', label: 'Barrido de vía', tell: 60, duration: 24, w: W - 36, depth: 75 },
+  mortar: { kind: 'salvo', label: 'Caída de carga', tell: 47, duration: 43, w: 258, depth: 70 },
+  fan: { kind: 'salvo', label: 'Salva dirigida', tell: 36, duration: 24, w: 96, depth: 47 },
+  pulse: { kind: 'signal', label: 'Descarga de señal', tell: 57, duration: 27, w: 310, depth: 94 },
+  ring: { kind: 'signal', label: 'Anillo de dispersión', tell: 47, duration: 24, w: 142, depth: 53 },
+  swarm: { kind: 'reinforcements', label: 'Llegan refuerzos', tell: 40, duration: 16, w: 144, depth: 52 },
+};
+
+function startBossAttack(s: GameState, e: Enemy, target: Player, type: BossType, phase: number) {
+  const rotation = BOSS_ROTATIONS[type][phase - 1];
+  const pattern = rotation[e.n++ % rotation.length];
+  const move = BOSS_MOVES[pattern];
+  const span = pattern === 'sweep' && type === 'gerenta' ? 95 : move.depth;
+  const center = s.camX + W / 2;
+  const onSource = pattern === 'ring' || pattern === 'swarm';
+  const acrossRoom = pattern === 'sweep' || pattern === 'charge';
+  const x = acrossRoom ? center : onSource ? e.x : Math.max(s.camX + move.w / 2, Math.min(s.camX + W - move.w / 2, target.x));
+  const z = onSource ? e.z : Math.max(20, Math.min(110, target.z));
+  const dir = pattern === 'charge' ? (e.x > center ? -1 : 1) : (target.x < e.x ? -1 : 1);
+  const tell = move.tell - (phase - 1) * 5;
+  const duration = move.duration - (pattern === 'charge' ? (phase - 1) * 6 : 0);
+  const label = pattern === 'sweep' && type === 'gerenta' ? 'Láser de desvinculación' : move.label;
+  e.attack = { ...move, label, pattern, tell, duration, x, z, depth: span, dir, elapsed: 0, power: phase, originX: e.x };
+  e.face = dir;
+  e.st = 1;
+  shotZ = e.z;
+  emit(s, 'warn', e.x, e.y - e.h / 2);
+}
+
+function bossShockwave(s: GameState, x: number, z: number, dir: number) {
+  shotZ = z;
+  eshot(s, x, 442, dir > 0 ? 0 : Math.PI, 6, 13, 'wave');
+}
+
+function hitBossArea(s: GameState, attack: BossAttack, x: number, reach: number, height: number, damage: number) {
+  const bounds = bossAttackBounds(attack);
+  for (const p of living(s)) {
+    if (Math.abs(p.x - x) >= reach + p.w / 2 || Math.abs(p.z - bounds.z) >= bounds.depth || p.y <= 460 - height) continue;
+    shotZ = p.z;
+    hurtPlayer(s, p, damage);
+  }
+}
+
+function callBossReinforcements(s: GameState, e: Enemy, attack: BossAttack) {
+  const side = attack.dir;
+  const foes = e.type === 'colmena' ? ['flyer', 'flyer'] as const :
+    e.type === 'grua' ? ['flyer', 'exploder'] as const :
+    e.type === 'camion' ? ['grunt', 'rusher'] as const : ['shield', 'exploder'] as const;
+  const limit = 3 + active(s).length;
+  let count = s.enemies.filter(enemy => enemy.hp > 0).length;
+  foes.forEach((type, i) => {
+    if (count >= limit) return;
+    const fly = ENEMIES[type].fly;
+    const atRight = i === 0 ? side > 0 : side < 0;
+    const x = s.camX + (atRight ? W + 28 : -28);
+    spawnEnemy(s, type, x, fly ? 190 + i * 48 : 460, false).z = i === 0 ? 26 : 104;
+    count++;
+  });
+}
+
+function fireBossPattern(s: GameState, e: Enemy, attack: BossAttack, pulse: number) {
+  const power = attack.power;
+  const y = e.y - e.h * .54;
+  shotZ = attack.z;
+  switch (attack.pattern) {
+    case 'mortar': {
+      for (let i = 0; i < 3 + power; i++) {
+        const offset = (i / (2 + power) - .5) * (attack.w - 34);
+        shotZ = attack.z + (i % 2 ? 13 : -13);
+        eshot(s, attack.x + offset, -30 - i * 8, Math.PI / 2, 14, 11 + power, 'orbe');
+      }
+      break;
+    }
+    case 'fan': {
+      const aim = Math.atan2(415 - y, attack.x - e.x);
+      for (let i = -2; i <= 2; i++) eshot(s, e.x, y, aim + i * .15, 4.6 + power * .35, 9 + power, 'orbe');
+      break;
+    }
+    case 'ring': {
+      const count = 10 + power * 2;
+      const angle = e.n * .57 + pulse * .23;
+      for (let i = 0; i < count; i++) {
+        shotZ = Math.max(8, Math.min(DEPTH - 8, e.z + ((i % 3) - 1) * 28));
+        eshot(s, e.x, y, angle + i * Math.PI * 2 / count, 3.8 + power * .25, 10 + power);
+      }
+      break;
+    }
+  }
+  shotZ = e.z;
+  emit(s, 'eshot', e.x, y);
+}
+
+function recoverBoss(s: GameState, e: Enemy, target: Player, type: BossType) {
+  const center = s.camX + W / 2;
+  const left = s.camX + e.w / 2 + 20, right = s.camX + W - e.w / 2 - 20;
+  e.face = type === 'colmena' ? -1 : (target.x >= e.x ? 1 : -1);
+  e.vx = 0;
+  if (type === 'grua') {
+    e.y += (222 - e.y) * .07;
+    e.x += (Math.max(left, Math.min(right, target.x)) - e.x) * .014;
+  } else if (type === 'loco') {
+    e.y += (247 + Math.sin(e.t * .06) * 25 - e.y) * .075;
+    e.x += (center + Math.sin(s.tick * .021) * 280 - e.x) * .028;
+  } else if (type === 'gerenta') {
+    e.y += (222 + Math.sin(e.t * .08) * 22 - e.y) * .062;
+    e.x += (center + (e.n % 2 ? -W * .24 : W * .24) - e.x) * .044;
+  }
+}
+
+function stepBoss(s: GameState, e: Enemy, target: Player, lv: Level) {
+  const type = e.type as BossType;
+  const phase = bossPhase(e);
+  const left = s.camX + e.w / 2 + 20, right = s.camX + W - e.w / 2 - 20;
   if (phase > (e.announced ?? 1)) {
     e.announced = phase;
-    const taunt = e.type === 'gerenta' ? (fury ? '¡Esto afecta mi bono anual!' : '¡Se cancelan las vacaciones!') : e.type === 'camion' ? '¡Reciclaje sin clasificar!' : e.type === 'grua' ? '¡Izaje emocional!' : e.type === 'loco' ? '¡Próxima parada: traumatología!' : '¡El grupo se quedó sin admin!';
-    emit(s, 'bossphase', e.x, cy, phase, taunt); emit(s, 'text', W / 2, 155, phase, taunt);
+    e.n = 0;
+    const line = PHASE_LINES[type][phase - 2];
+    emit(s, 'bossphase', e.x, e.y - e.h / 2, phase, line);
+    emit(s, 'text', W / 2, 155, phase, line);
   }
-  const next = (st: number) => { e.st = st; e.t = 0; };
-  const add = (type: EnemyType, y?: number) => { if (s.enemies.filter(o => o.hp > 0).length < 5 + active(s).length) { const side = rnd(s) < .5; spawnEnemy(s, type, side ? s.camX - 30 : s.camX + W + 30, y ?? 300, false); } };
-  switch (e.type) {
-    case 'camion':
-      if (e.st === 0) { e.vx *= .9; if (e.t === 1) emit(s, 'warn', e.x, cy); if (e.t > (rage ? 40 : 65)) { e.face = e.x > s.camX + W / 2 ? -1 : 1; next(1); } }
-      else if (e.st === 1) { e.vx = e.face * (rage ? 11 : 8.5); if (s.tick % 5 === 0) emit(s, 'dust', e.x - e.face * 80, e.y); if ((e.face > 0 && e.x >= Rr) || (e.face < 0 && e.x <= L)) { e.x = Math.max(L, Math.min(Rr, e.x)); e.vx = 0; s.shake = 14; emit(s, 'boom', e.x + e.face * 80, e.y - 30, 60); bossWave(s, e, lv, -e.face); next(2); } }
-      else { if (e.t % (rage ? 16 : 24) === 0) { const dx = tgt.x - e.x + (rnd(s) - .5) * 120, air = 55; eshot(s, e.x, e.y - 100, Math.atan2(-.25 * air / 2, dx / air), Math.hypot(dx / air, .25 * air / 2), 14, 'granada', .25); emit(s, 'eshot', e.x, e.y - 100); } if (e.t > 90) { if (rage) add('grunt'); next(0); } }
-      break;
-    case 'grua':
-      if (e.st === 0) { const tx = Math.max(L, Math.min(Rr, tgt.x)); e.x += (tx - e.x) * .035; e.y += (190 - e.y) * .08; if (e.t > (rage ? 60 : 90)) { emit(s, 'warn', e.x, cy); next(1); } }
-      else if (e.st === 1) { if (e.t > 22) { e.y += 15; const g = surfaceAt(lv, e.x) ?? 460; if (e.y >= g) { e.y = g; s.shake = 16; emit(s, 'boom', e.x, g - 10, 70); bossWave(s, e, lv, -1); bossWave(s, e, lv, 1); next(2); } } }
-      else if (e.st === 2) { if (e.t > 40) { e.y += (190 - e.y) * .09; if (Math.abs(e.y - 190) < 6) next(3); } }
-      else { if (e.t % (rage ? 14 : 22) === 0) { const x = s.camX + 80 + rnd(s) * (W - 160); eshot(s, x, -20, Math.PI / 2, 3, 16, 'granada', .2); emit(s, 'eshot', x, 20); } if (e.t === 60 && fury) ring(s, e.x, cy, 12, 3.6); if (e.t > 110) { if (rage) add('flyer', 160); next(0); } }
-      break;
-    case 'loco': {
-      e.y += ((230 + Math.sin(e.t * .03) * 50) - e.y) * .05; const hx = s.camX + W / 2 + Math.sin(s.tick * .012) * 280; e.x += (hx - e.x) * .02;
-      e.n++; const per = rage ? 70 : 100;
-      if (e.n % per === 0) { for (const o of [-.3, -.15, 0, .15, .3]) eshot(s, e.x, cy, aim + o, 4.2, 12); emit(s, 'eshot', e.x, cy); }
-      if (e.n % 260 === 0) { const f = surfaceAt(lv, s.camX + 2) ?? 430; for (const dir of [-1, 1]) s.bullets.push({ z: shotZ, id: s.nextId++, x: dir > 0 ? s.camX : s.camX + W, y: f - 18, vx: dir * 5.5, vy: 0, dmg: 14, life: 200, kind: 'wave', side: 1, owner: -1, pierce: true, grav: 0, r: 18, hits: [] }); emit(s, 'warn', e.x, cy); }
-      if (e.n % 420 === 0) { add('flyer', 180); add('rusher'); if (fury) add('exploder'); }
-      if (fury && e.n % 90 === 0) ring(s, e.x, cy, 10, 3.5, e.n * .1);
-      break; }
-    case 'colmena': {
-      e.face = -1; e.n++; const top = e.y - e.h + 50; const per = rage ? 80 : 120;
-      if (e.n % per === 0) { ring(s, e.x, top, rage ? 14 : 10, 3.2, e.n * .07); emit(s, 'eshot', e.x, top); }
-      if (e.n % 200 === 40) { bossWave(s, e, lv, -1); emit(s, 'warn', e.x, e.y - 20); }
-      if (e.n % 300 === 150) { add('flyer', 180); add('flyer', 240); if (rage) add('exploder'); }
-      if (fury && e.n % 40 === 0) eshot(s, e.x - 40, top + 60, aim, 5);
-      break; }
-    case 'gerenta': {
-      const f = fury ? .55 : rage ? .75 : 1;
-      if (e.st === 0) { const tx = s.camX + W * (e.n % 2 ? .25 : .75); e.x += (tx - e.x) * .05; e.y += (220 + Math.sin(e.t * .08) * 30 - e.y) * .06; if (e.t > 70 * f) { e.n++; next(1 + e.n % 4); emit(s, 'warn', e.x, cy); } }
-      else if (e.st === 1) { if (e.t % Math.round(14 * f) === 0) { for (const o of [-.35, -.18, 0, .18, .35]) eshot(s, e.x, cy, aim + o, 4.8, 12, 'orbe'); emit(s, 'eshot', e.x, cy); } if (e.t > 55) next(0); }
-      else if (e.st === 2) { if (e.t === 25) { ring(s, e.x, cy, 16, 3.4); emit(s, 'eshot', e.x, cy); } if (fury && e.t === 50) ring(s, e.x, cy, 16, 3.4, .2); if (e.t > 70) next(0); }
-      else if (e.st === 3) { const g = surfaceAt(lv, e.x) ?? 460; if (e.t < 28) { e.y += (120 - e.y) * .1; e.x += (tgt.x - e.x) * .05; } else { e.y += 17; if (e.y >= g) { e.y = g; s.shake = 15; emit(s, 'boom', e.x, g - 8, 80); bossWave(s, e, lv, -1); bossWave(s, e, lv, 1); next(0); } } }
-      else { if (e.t === 20) { add('grunt'); add('flyer', 180); if (rage) add('shield'); if (fury) add('exploder'); s.score += 0; emit(s, 'text', W / 2, 190, 0, '¡Sumen personal!'); } if (e.t > 50) next(0); }
-      break; }
+
+  const attack = e.attack;
+  if (!attack) {
+    recoverBoss(s, e, target, type);
+    const recovery = [65, 54, 45][phase - 1];
+    if (e.t >= recovery) startBossAttack(s, e, target, type, phase);
+    return;
   }
-  if (e.x < L) e.x = L; if (e.x > Rr) e.x = Rr;
+
+  attack.elapsed++;
+  const live = attack.elapsed - attack.tell;
+  if (live < 0) {
+    if (attack.pattern === 'slam') {
+      const dropX = Math.max(left, Math.min(right, attack.x));
+      e.x += (dropX - e.x) * .09;
+      e.z += (attack.z - e.z) * .12;
+      const height = 212 - 65 * (attack.elapsed / attack.tell);
+      e.y += (height - e.y) * .13;
+    } else if (attack.pattern === 'charge') {
+      e.z += (attack.z - e.z) * .14;
+    }
+    return;
+  }
+
+  e.st = 2;
+  const damage = 12 + attack.power * 2;
+  if (attack.pattern === 'charge') {
+    const endX = attack.dir < 0 ? left : right;
+    const progress = Math.min(1, (live + 1) / attack.duration);
+    e.x = attack.originX + (endX - attack.originX) * progress;
+    e.z = attack.z;
+    if (live % 4 === 0) { shotZ = e.z; emit(s, 'dust', e.x - e.face * 75, e.y); }
+    hitBossArea(s, attack, e.x, e.w / 2, 74, damage + 2);
+    if (live === attack.duration - 1) {
+      shotZ = e.z;
+      emit(s, 'boom', e.x + e.face * 45, e.y - 18, 54);
+      s.shake = Math.max(s.shake, 11);
+    }
+  } else if (attack.pattern === 'slam') {
+    if (live < 11) {
+      const surface = surfaceAt(lv, e.x) ?? 460;
+      e.y += (surface - e.y) / Math.max(1, 11 - live);
+      if (live === 10) {
+        shotZ = attack.z;
+        emit(s, 'boom', attack.x, surface - 9, 76);
+        s.shake = Math.max(s.shake, 15);
+        if (attack.power >= 2) {
+          bossShockwave(s, attack.x, attack.z, -1);
+          bossShockwave(s, attack.x, attack.z, 1);
+        }
+      }
+    } else if (live < 17) {
+      hitBossArea(s, attack, attack.x, attack.w / 2, 59, damage + 2);
+    }
+  } else if (attack.pattern === 'sweep' || attack.pattern === 'pulse') {
+    if (live === 0) { shotZ = attack.z; emit(s, 'boom', attack.x, 435, 34); }
+    hitBossArea(s, attack, attack.x, attack.w / 2, attack.pattern === 'sweep' ? 57 : 48, damage);
+  } else if (attack.pattern === 'swarm') {
+    if (live === 0) callBossReinforcements(s, e, attack);
+  } else if (live === 0 || (attack.power >= 2 && live === 16 && attack.pattern !== 'mortar')) {
+    fireBossPattern(s, e, attack, live);
+  }
+
+  if (live + 1 >= attack.duration) {
+    e.attack = undefined;
+    e.st = 0;
+    e.t = 0;
+  }
 }
