@@ -29,7 +29,7 @@ body {
 }
 button, input { font: inherit; }
 button { color: inherit; cursor: pointer; }
-:focus-visible {
+:focus-visible, .pad-navigation button:focus, .pad-navigation input:focus {
   outline: 3px solid var(--mint);
   outline-offset: 4px;
 }
@@ -187,7 +187,7 @@ h3, p { margin: 0; }
 .title-content { position: absolute; top: 95px; left: 44px; width: 330px; }
 .logo {
   margin: 0 0 18px;
-  font: italic 900 104px/.77 var(--title);
+  font: italic 900 100px/.77 var(--title);
   letter-spacing: -2px;
   text-transform: uppercase;
   text-shadow: 3px 4px 0 #301e32, 5px 7px 0 #040711;
@@ -395,6 +395,18 @@ h3, p { margin: 0; }
   text-align: left;
 }
 .mission-number { color: var(--scene-accent); font: 800 35px/1 var(--title); text-shadow: 1px 2px 0 #08101b; }
+.mission-item {
+  width: 62px;
+  height: 62px;
+  align-self: center;
+  background: var(--archive-sprites) var(--item-position)/300% 200% no-repeat;
+  filter: drop-shadow(0 3px 3px #050a15) drop-shadow(0 0 6px var(--scene-accent));
+  animation: mission-item-hover 3.4s var(--item-delay) ease-in-out infinite;
+}
+@keyframes mission-item-hover {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
 .missions h3 { margin-bottom: 8px; color: var(--ink); font: 800 27px/.91 var(--title); }
 .missions p { min-height: 53px; color: #d5dfe7; font-size: 12px; line-height: 1.25; }
 .missions p.mission-boss { min-height: 0; padding-top: 7px; margin-top: 9px; border-top: 1px solid var(--line); color: var(--scene-accent); font-weight: 800; }
@@ -645,8 +657,8 @@ h3, p { margin: 0; }
   display: grid;
   place-content: center;
   gap: 3px;
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
   padding: 0;
   color: var(--button-color);
   border: 2px solid color-mix(in srgb, var(--button-color) 66%, transparent);
@@ -663,8 +675,8 @@ h3, p { margin: 0; }
 .b.ju { --button-color: #a9f0cf; right: 0; bottom: 9px; }
 .b.me { --button-color: #ffdc83; right: 34px; bottom: 96px; }
 .b.sp { --button-color: #d4c8ff; right: 124px; bottom: 99px; }
-.b.dash { right: 187px; bottom: 8px; width: 67px; height: 67px; }
-.b.gr { right: 211px; bottom: 92px; width: 66px; height: 66px; }
+.b.dash { right: 187px; bottom: 8px; width: 74px; height: 74px; }
+.b.gr { right: 211px; bottom: 92px; width: 74px; height: 74px; }
 .b.gr::after {
   content: attr(data-count);
   position: absolute;
@@ -682,9 +694,12 @@ h3, p { margin: 0; }
 .b.charged { --button-color: #ffe1a2; box-shadow: 0 0 14px #ffce6770; }
 .touch-play #hits { bottom: 184px; left: 23px; }
 .touch-play #foe { bottom: 184px; }
-.touch-play #bossbar { left: 202px; bottom: 18px; width: 413px; transform: none; }
-.touch-play #bossbar span:first-child { display: none; }
+.touch-play #bossbar { left: 202px; bottom: 18px; width: 426px; transform: none; }
+.touch-play #bn { font-size: 19px; }
+.touch-play #bossbar span { max-width: 112px; }
 .touch-play #mission-objective { font-size: 12px; }
+.touch-play .play-tools .icon-btn { min-height: 54px; min-width: 54px; font-size: 12px; }
+.touch-play .play-tools .icon-btn:last-child { font-size: 21px; }
 
 #toast {
   position: absolute;
@@ -740,6 +755,9 @@ h3, p { margin: 0; }
 #rotate-hint p { margin-top: 4px; }
 
 @media (orientation: portrait) and (pointer: coarse) { #rotate-hint { display: block; } }
+@media (pointer: coarse) {
+  .title-utils .m, .title-utils .icon-btn, .online-actions .m { min-height: 44px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

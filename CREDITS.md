@@ -2,7 +2,7 @@
 
 | Recurso | Origen | Licencia |
 |---|---|---|
-| Personajes, enemigos, jefes, fondos, efectos y portada (`arte/`, `public/arte/`) | Generados con herramientas de IA de OpenAI a pedido de Nahuel Benítez, con prompts de `ART_PROMPTS.md` | Sujetos a las condiciones de uso de OpenAI; no se incluyen en la licencia MIT del código |
+| Personajes, enemigos, jefes, fondos, efectos, coleccionables y portada (`arte/`, `public/arte/`) | Generados con herramientas de IA de OpenAI a pedido de Nahuel Benítez, con prompts de `ART_PROMPTS.md` | Sujetos a las condiciones de uso de OpenAI; no se incluyen en la licencia MIT del código |
 | Música y efectos de sonido (`src/audio.ts`) | Sintetizados en vivo con Web Audio para este juego | MIT, igual que el proyecto |
 | Historia, nombres y textos | Originales de este juego | MIT, igual que el proyecto |
 | Barlow y Barlow Condensed | The Barlow Project Authors; cargadas desde Google Fonts | SIL Open Font License 1.1: [Barlow](https://github.com/google/fonts/blob/main/ofl/barlow/OFL.txt), [Barlow Condensed](https://github.com/google/fonts/blob/main/ofl/barlowcondensed/OFL.txt) |

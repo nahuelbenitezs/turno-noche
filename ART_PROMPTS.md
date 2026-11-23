@@ -89,6 +89,14 @@ Sprite sheet of game items in a grid, equal cells: wooden crate, red explosive b
 
 Efectos, en otra imagen (`efectos.png`), con 6 cuadros por fila: `white-blue slash arc, hit spark, explosion, dust puff, fire burst, healing sparkles.`
 
+## Coleccionables de misión (`arte/archivos.png`)
+
+Generados con la herramienta integrada de imágenes, con `public/arte/objetos.webp` como referencia de estilo. Cada objeto corresponde a una misión. La sexta celda queda vacía.
+
+```text
+Use the reference as visual style only, for the original 2D arcade beat-em-up Turno Noche. Create one production sprite sheet on an actually transparent alpha background. Exactly five distinct standalone collectible mission items, arranged as a regular 3-column / 2-row grid with wide transparent gutters and the bottom-right cell empty. Top left a yellow-orange sun battery cartridge with charcoal caps and warm luminous glass; top center a cyan shipping manifest scanner shaped like a rugged PDA with a bright cyan screen and corner bumpers; top right a green brass railway token with sturdy ridged rim, green glass center and angular engraved rail junction pictogram; bottom left a violet signal crystal clipped in a dark metallic antenna bracket; bottom center a red-orange high security sun capsule with a bright small sphere enclosed within a steel orbital cage. Each sprite centered and completely within its cell with ample empty padding, all items comparable in size, readable silhouettes at 24 pixels, pixel art with blocky hand-placed clusters, rich highlights, deep contours, slight 3/4 front view as the references. Transparent space around every object, no floor, no grid lines, no colored backdrop, no drop shadows, no motion trails, no surrounding particles, no characters, no text or logos. Wide landscape sprite sheet.
+```
+
 ## 7. Portada: `portada.png`
 
 ```text

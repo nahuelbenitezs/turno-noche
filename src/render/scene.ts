@@ -112,9 +112,11 @@ export function buildScenery(
       .rect(5, 5, 3, 13).fill(color)
       .rect(w - 1, 10, 9, 2).fill({ color, alpha: .6 })
       .rect(w + 7, 12, 2, 3).fill({ color, alpha: .6 });
-    plate.position.set(x - 45, y - 52);
-    label.position.set(14, 5); plate.addChild(label);
-    fixtures.addChild(sprite, plate);
+    const sign = new Container();
+    sign.position.set(x - 45, y - 52);
+    label.position.set(14, 5);
+    sign.addChild(plate, label);
+    fixtures.addChild(sprite, sign);
   }
   return { layer, lights };
 }

@@ -42,6 +42,7 @@ export class Renderer {
   private mobile = matchMedia('(pointer: coarse)').matches;
   private lastSimTick = -1;
   private hazardLabels = new Map<string, Text>();
+  private enemyShotUntil = new Map<number, number>();
   rigs = new Map<number, Rig>(); objs = new Map<number, Sprite>(); parts: Part[] = []; floats: { t: Text; life: number }[] = [];
   flash!: Graphics; levelDrawn = -1; smooth = 1; zoomPunch = 0; shakeExtra = 0; t = 0; camShown = 0;
 
@@ -83,8 +84,17 @@ export class Renderer {
     const scenery = buildScenery(lv.theme, lv.sections, this.motifs[lv.theme], this.glow);
     this.levelC.addChild(scenery.layer); this.lights = scenery.lights;
     for (const label of this.hazardLabels.values()) label.destroy(); this.hazardLabels.clear();
+    this.clearEffects();
+  }
+  private clearEffects() {
+    this.enemyShotUntil.clear();
     for (const p of this.parts) p.s.destroy(); this.parts = [];
     for (const f of this.floats) f.t.destroy(); this.floats = [];
+    this.flash.alpha = 0; this.zoomPunch = 0; this.shakeExtra = 0;
+    for (const r of this.rigs.values()) { r.landing = 0; r.special = 0; r.gait = 0; }
+  }
+  private clearObjects() {
+    this.objs.forEach(o => o.destroy()); this.objs.clear();
   }
   private rig(p: Player): Rig {
     const old = this.rigs.get(p.id);
@@ -121,10 +131,11 @@ export class Renderer {
     if (!show) return;
     const py = screenY(p.y, p.z), k = 1 - (1 - this.smooth) ** this.dt;
     const dx = p.x - r.c.x, dy = py - r.c.y;
-    const lateral = Math.abs(p.vx) > .6 || Math.abs(p.z - r.z) > .25;
+    const depthMotion = p.ground && r.grounded ? Math.abs(dy * k) : Math.abs(p.z - r.z);
+    const lateral = Math.abs(p.vx) > .6 || depthMotion > .35;
     r.c.x += dx * k; r.c.y += dy * k;
     if (Math.abs(dx) > 180 || Math.abs(dy) > 145) r.c.position.set(p.x, py);
-    r.gait += p.ground ? Math.min(12, Math.abs(dx * k) + Math.abs(p.z - r.z)) * .055 : 0;
+    r.gait += p.ground ? Math.min(12, Math.abs(dx * k) + depthMotion) * .055 : 0;
     r.z = p.z;
     r.landing = p.ground && !r.grounded ? 5 : Math.max(0, r.landing - this.dt);
     r.grounded = p.ground; r.special = Math.max(0, r.special - this.dt);
@@ -152,7 +163,10 @@ export class Renderer {
     }
     const row = ENEMY_ROW[e.type]! * 6, sh = this.sheets.enemigos;
     if (e.flash > 1 || e.stun > 0) return sh[row + 4]!;
-    if (e.cd > 0 && e.cd < 14) return sh[row + (e.cd < 6 ? 2 : 3)]!;
+    const shotUntil = this.enemyShotUntil.get(e.id);
+    if (shotUntil !== undefined && shotUntil > this.t) return sh[row + 3]!;
+    if (e.type === 'rusher' && !e.ground && Math.abs(e.vx) > 2) return sh[row + 3]!;
+    if (e.cd > 0 && e.cd < 10) return sh[row + 2]!;
     if (e.type === 'exploder' && e.st > 0) return sh[row + 3]!;
     return sh[row + ((e.t >> 3) % 2)]!;
   }
@@ -238,9 +252,10 @@ export class Renderer {
       }
       if ((p.dashT > 0 || p.specialT > 0) && newTick && s.tick % (this.lowFx ? 4 : 2) === 0 && !this.reducedMotion && this.parts.length < (this.lowFx ? 70 : 260)) {
         const rig = this.rigs.get(p.id)!; const sp = new Sprite(rig.body.texture);
-        sp.anchor.copyFrom(rig.body.anchor); sp.position.set(p.x - p.dashX * 11, y - p.dashZ * 2);
+        const vx = p.dashT ? p.dashX : p.face * 12, vz = p.dashT ? p.dashZ : 0;
+        sp.anchor.copyFrom(rig.body.anchor); sp.position.set(p.x - vx * 1.15, y - vz * 1.15);
         sp.scale.copyFrom(rig.body.scale); sp.rotation = rig.body.rotation; sp.tint = p.counterT > 0 ? 0x7feaff : CHARS[p.char].color;
-        this.fxC.addChild(sp); this.parts.push({ s: sp, vx: -p.dashX * .5, vy: -p.dashZ * .2, g: 0, life: 12, max: 12, spin: 0, grow: 0, alpha: .25 });
+        this.fxC.addChild(sp); this.parts.push({ s: sp, vx: -vx * .06, vy: -vz * .06, g: 0, life: 12, max: 12, spin: 0, grow: 0, alpha: .25 });
       }
     }
     for (const e of s.enemies) if (visible(e.x) && e.hp > 0) {
@@ -385,7 +400,7 @@ export class Renderer {
     this.drawAt = now; this.t += this.dt;
     const newTick = s.tick !== this.lastSimTick; this.lastSimTick = s.tick;
     const lvIdx = Math.min(s.levelIdx, LEVELS.length - 1);
-    if (this.levelDrawn !== lvIdx) { this.drawLevel(lvIdx); this.objs.forEach(o => o.destroy()); this.objs.clear(); this.camShown = s.camX; }
+    if (this.levelDrawn !== lvIdx) { this.drawLevel(lvIdx); this.clearObjects(); this.camShown = s.camX; }
     const mag = this.reducedMotion ? 0 : Math.min(18, s.shake + this.shakeExtra); this.shakeExtra *= .85 ** this.dt;
     const sx = (Math.sin(this.t * 1.9) + Math.sin(this.t * 3.1)) * mag * .2, sy = (Math.cos(this.t * 2.3) + Math.sin(this.t * 2.9)) * mag * .2;
     const smooth = 1 - (1 - this.smooth) ** this.dt;
@@ -456,7 +471,7 @@ export class Renderer {
       }
     }
     for (const b of s.bullets) { seen.add(b.id); this.syncBullet(s, b, newTick); }
-    this.objs.forEach((o, id) => { if (!seen.has(id)) { o.destroy(); this.objs.delete(id); } });
+    this.objs.forEach((o, id) => { if (!seen.has(id)) { o.destroy(); this.objs.delete(id); this.enemyShotUntil.delete(id); } });
     this.drawMarkers(s, newTick); this.drawHazards(s); this.drawAtmosphere(s);
     this.stepParts();
     this.floats = this.floats.filter(f => {
@@ -471,6 +486,7 @@ export class Renderer {
   // ---------- Partículas y efectos ----------
   private spawn(x: number, y: number, tint: number, o: ParticleOptions = {}) {
     if (this.parts.length >= (this.lowFx ? 80 : 280)) return;
+    if (x < this.camShown - 240 || x > this.camShown + W + 240) return;
     const s = new Sprite(o.tex ?? this.chunk); s.anchor.set(.5); s.position.set(x, y); s.tint = tint;
     if (!o.noRot) s.rotation = Math.random() * 6;
     s.scale.set(o.size ?? 1); s.visible = !o.delay;
@@ -550,9 +566,10 @@ export class Renderer {
     while (this.floats.length > 5) this.floats.shift()!.t.destroy();
   }
   fx(e: Ev, s: GameState) {
-    if (e.k === 'levelstart' && this.levelDrawn !== s.levelIdx) {
-      this.drawLevel(s.levelIdx);
-      this.objs.forEach(o => o.destroy()); this.objs.clear(); this.camShown = s.camX;
+    if (e.k === 'levelstart') {
+      if (this.levelDrawn !== s.levelIdx) this.drawLevel(s.levelIdx);
+      else this.clearEffects();
+      this.clearObjects(); this.camShown = s.camX;
     }
     const nearestPlayer = () => {
       let value: Player | undefined, radius = 70;
@@ -569,7 +586,17 @@ export class Renderer {
         this.sparks(e.x, e.y, 3, color, 5, e.a ?? 0);
         break;
       }
-      case 'eshot': this.spawn(e.x, e.y, 0xff8e77, { tex: this.glow, size: .49, life: 5, v: 0, add: true }); break;
+      case 'eshot': {
+        let nearest: Enemy | undefined, radius = 70;
+        for (const enemy of s.enemies) {
+          if (enemy.hp <= 0 || isBoss(enemy.type)) continue;
+          const d = Math.hypot(enemy.x - e.x, screenY(enemy.y, enemy.z) - enemy.h / 2 - e.y);
+          if (d < radius) { nearest = enemy; radius = d; }
+        }
+        if (nearest) this.enemyShotUntil.set(nearest.id, this.t + 8);
+        this.spawn(e.x, e.y, 0xff8e77, { tex: this.glow, size: .49, life: 5, v: 0, add: true });
+        break;
+      }
       case 'hit': this.animated('impact', e.x, e.y, 41, 8, 0xffe3b8); break;
       case 'melee': {
         const p = nearestPlayer();
@@ -656,7 +683,12 @@ export class Renderer {
           this.boom(e.x + (Math.random() - .5) * 150, e.y + (Math.random() - .5) * 90, 70 + Math.random() * 50, i * 5 + 4);
         }
         break;
-      case 'boss': this.floatText(W / 2, 170, e.s ?? '', 0xff5a4e, 40); this.shakeExtra = 18; break;
+      case 'boss':
+        this.animated('blast', e.x, e.y - 32, 220, 27, 0xffbb78);
+        this.sparks(e.x, e.y - 32, 12, 0xffbb78, 8);
+        this.floatText(W / 2, 170, e.s ?? '', 0xff8069, 37);
+        this.shakeExtra = 16;
+        break;
       case 'bosswarn': this.floatText(W / 2, 220, '¡ATENCIÓN!', 0xffd23f, 50); break;
       case 'bossphase': this.animated('blast', e.x, e.y, 230, 28, e.a === 3 ? 0xff7864 : 0xffd979); break;
       case 'warn': this.spawn(e.x, e.y, 0xff3030, { tex: this.glow, size: 1.6, life: 16, v: 0, add: true }); break;

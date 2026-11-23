@@ -26,7 +26,7 @@ export interface UiContext {
   medals?: readonly number[];
 }
 
-const asset = (name: string) => `${import.meta.env.BASE_URL}arte/${name}.webp`;
+const asset = (name: string) => new URL(`${import.meta.env.BASE_URL}arte/${name}.webp`, document.baseURI).href;
 const scenes = ['barrio', 'puerto', 'tren', 'torre', 'nave'];
 const routeNames = ['Barrio', 'Puerto', 'Tren', 'Torre', 'Nodriza'];
 const routeColors = ['#ffc266', '#7ce6c9', '#ff9f76', '#b5a2ff', '#ffc073'];
@@ -71,7 +71,7 @@ export const KEYS = `<div class="keys">
   <div class="combat-guide">
     <h3>Ganá espacio</h3>
     <p>Golpeá un proyectil para devolverlo. Golpeá en el aire para caer en picada.</p>
-    <p>Esquivá a tiempo para potenciar tu próximo impacto. Alterná jugadores sobre el mismo enemigo para coordinar un golpe de equipo.</p>
+    <p>Esquivá a tiempo para potenciar tu próximo impacto. Golpeá a un enemigo justo después del ataque de otro jugador para coordinar un golpe de equipo.</p>
     <h3>Cuidá a la cuadrilla</h3>
     <p>Quedate al lado de un compañero caído para levantarlo. Rescatá prisioneros para conseguir suministros.</p>
   </div>
@@ -156,12 +156,14 @@ function menu(c: UiContext) {
         ${button('cancelnet', 'Cancelar')}`);
     case 'missions':
       return panel('dossier', `${heading('La ruta del amanecer', 'Cinco misiones para recuperar el sol.')}
-        <div class="missions">${LEVELS.map((lv, i) => {
+        <div class="missions" style="--archive-sprites:url('${asset('archivos')}')">${LEVELS.map((lv, i) => {
           const boss = lv.arenas.find(a => a.boss)?.boss;
           const open = i === 0 || (c.medals?.[i - 1] ?? 0) > 0;
           const medal = ['', 'B', 'A', 'S'][c.medals?.[i] ?? 0];
+          const spritePosition = `${i % 3 * 50}% ${i < 3 ? 0 : 100}%`;
           return `<article style="${scene(i)}"><div class="mission-card-top"><span class="mission-number">${number(i)}</span>
-            ${medal ? `<b class="mission-medal" aria-label="Mejor rango ${medal}">${medal}</b>` : ''}</div><div>
+            ${medal ? `<b class="mission-medal" aria-label="Mejor rango ${medal}">${medal}</b>` : ''}</div>
+            <div class="mission-item" style="--item-position:${spritePosition};--item-delay:${-i * .45}s" aria-hidden="true"></div><div>
             <h3>${esc(lv.name)}</h3><p>${esc(lv.objective)}</p>
             ${boss ? `<p class="mission-boss">${esc(ENEMIES[boss].name ?? '')}</p>` : ''}
             ${open ? `<button class="m alt mission-replay" data-a="replay-${i}" aria-label="Jugar ${esc(lv.name)}">Jugar misión ↗</button>`
@@ -185,16 +187,17 @@ function selection(c: UiContext) {
     const status = owner ? (locked ? `J${owner.slot + 1} · Reservado` : 'Ya elegiste') : here.length ? here.map(p => `J${p.slot + 1}`).join(' · ') : '';
     const color = ch.color.toString(16).padStart(6, '0');
     return `<button class="card${here.length ? ' hot' : ''}${owner ? ' confirmed' : ''}${locked ? ' locked' : ''}"
-      data-card="${i}" style="--c:#${color}" ${locked ? 'disabled' : ''} aria-label="${ch.name}${owner ? `, reservado por jugador ${owner.slot + 1}` : ', elegir personaje'}">
+      data-card="${i}" style="--c:#${color}" ${locked ? 'disabled' : ''} aria-label="${ch.name}${owner ? `, reservado por jugador ${owner.slot + 1}` : ', elegir personaje'}"
+      aria-describedby="desc-${ch.id} special-${ch.id}">
       <div class="portrait-wrap"><img src="${c.portraits[i] ?? ''}" alt="" width="136" height="136"><span>${status}</span></div>
       <span class="card-role">${ch.role}</span>
       <strong class="card-name">${ch.name}</strong>
-      <p class="char-desc">${ch.desc}</p>
+      <p class="char-desc" id="desc-${ch.id}">${ch.desc}</p>
       <div class="stat" aria-label="Vida ${ch.hp}, velocidad ${ch.speed}">
         <span>Vida</span><i style="--stat:${ch.hp / 1.4}%"></i>
         <span>Velocidad</span><i style="--stat:${ch.speed / 5.1 * 100}%"></i>
       </div>
-      <div class="special-info"><strong><span aria-hidden="true">✦</span> ${ch.special}</strong><p>${ch.specialDesc}</p></div>
+      <div class="special-info" id="special-${ch.id}"><strong><span aria-hidden="true">✦</span> ${ch.special}</strong><p>${ch.specialDesc}</p></div>
     </button>`;
   }).join('');
   const roster = c.s.players.map(p => `<li class="roster-slot${p.joined ? ' joined' : ''}${p.ready ? ' ready' : ''}">
@@ -267,7 +270,7 @@ export function screenHtml(c: UiContext): string {
       ${route(s.levelIdx, true)}
       <div class="result-heading"><span class="rank" aria-label="Rango ${rank}">${rank}</span>
         <div><p class="chapter">Misión ${number(s.levelIdx)} completada</p><h2>${esc(lv.name)}</h2>
-        <p class="bignum">${points(s.score)} <small>PTS DE CAMPAÑA</small></p></div>
+        <p class="bignum">${points(s.score)} <small>${s.replay ? 'PTS DE MISIÓN' : 'PTS DE CAMPAÑA'}</small></p></div>
       </div>
       ${tally([[recordGoal.name, `${records} / ${recordGoal.positions.length}`], ['Caídas', falls], ['Tiempo de misión', timeAt(ticks)]], 'Resultado de la misión')}
       ${s.replay ? button('reload', 'Volver al inicio', true)

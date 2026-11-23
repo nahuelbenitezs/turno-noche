@@ -223,6 +223,7 @@ function handleGamepads() {
   const press = presses.find(p => p.bits & (BTN.J | BTN.M | BTN.L | BTN.R | BTN.U | BTN.D));
   if (!press) return;
   const { bits, index } = press;
+  ui.classList.add('pad-navigation');
   if (bits & BTN.M) { const back = menuBack(); if (back) { inp.blockPadButton(index, BTN.M); action(back); } return; }
   const controls = [...ui.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter(el => el.getClientRects().length);
   const current = controls.find(el => el === document.activeElement);
@@ -280,7 +281,7 @@ addEventListener('keydown', e => {
   if ((e.code === 'Escape' || e.code === 'KeyP') && !e.repeat && mode !== 'menu' && s.phase === 'play') action(paused ? 'resume' : 'pause');
   if (e.code === 'KeyM' && !e.repeat) audio.toggle();
 });
-addEventListener('pointerdown', () => audio.unlock());
+addEventListener('pointerdown', () => { ui.classList.remove('pad-navigation'); audio.unlock(); });
 addEventListener('blur', () => { inp.reset(); if (mode === 'local' && s.phase === 'play' && !botOn) paused = true; });
 addEventListener('pagehide', () => { saveBest(); cleanupNet(); clearInterval(backgroundTimer); });
 addEventListener('pageshow', e => { if (e.persisted) location.reload(); });

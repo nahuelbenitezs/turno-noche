@@ -21,16 +21,18 @@ Acción arcade 2D cooperativa para 1 a 4 personas en el navegador. Se robaron el
 | Dash | `U` | `Shift` derecho / `Numpad 0` | `LB` / `LT` |
 | Granada | `O` | `Enter` / `Numpad 4` | `RB` |
 
-`Esc` o `P` abre la pausa; `M` cambia el sonido. En local la pausa detiene el juego. Online abre tu menú y deja la partida en marcha para el resto del equipo.
+`Esc`, `P` o `Start` abre la pausa. `M` cambia el sonido. En local la pausa detiene el juego. Online abre tu menú y deja la partida en marcha para el resto del equipo. En los menús, usá la cruz y `A` para elegir, y `Start` para iniciar cuando toda la cuadrilla haya confirmado.
 
 ## Mecánicas
 
 - **Granadas:** tres al comenzar cada nivel; rebotan y explotan después de una mecha. Los rescates y puntos de control reponen unidades hasta ese máximo.
-- **Dash ofensivo y esquiva perfecta:** atravesá enemigos para golpearlos. Esquivar una bala que se acerca carga el especial y el frenesí del equipo.
+- **Dash direccional y contragolpe:** combiná el dash con una dirección para cambiar de carril de un impulso o atravesar enemigos. Esquivar una bala justo antes del impacto carga el especial, el frenesí y un 60 % de daño adicional para tu próximo impacto.
+- **Golpe de equipo:** pegale cuerpo a cuerpo a un enemigo justo después de que un compañero lo dañe. El golpe suma daño y frenesí, y aturde a los enemigos comunes.
 - **Frenesí / ¡Horas extra!:** bajas, rescates, parries y cadenas cargan una barra compartida. Al llenarse, mejora temporalmente el daño y la cadencia y duplica los puntos de las bajas.
 - **Golpes y parry:** encadená tres golpes; golpear una bala la devuelve. Un golpe en el aire hace una picada con impacto al aterrizar.
 - **Rescates y explosiones en cadena:** liberá compañeros para conseguir armas y suministros; encadená barriles para sumar puntos y frenesí.
-- **Peligros por carril:** vapor, descargas y láseres tienen avisos visuales. Saltá, esquivá o cambiá de carril; los desvíos ofrecen suministros.
+- **Peligros y jefes:** el vapor, los puentes bajos y los láseres marcan la zona de peligro. Los cinco jefes cambian de patrón en tres fases. Aprovechá sus ventanas de recuperación para hacer más daño.
+- **Coleccionables y rangos:** encontrá los tres objetos de cada misión. El rango S exige los tres y cero caídas. El rango A exige al menos dos objetos o cero caídas. **Ver las 5 misiones** permite jugar cada misión desbloqueada por separado. Los rangos se guardan en ese navegador.
 - **Cooperación y puntos de control:** quedate junto a un compañero caído para levantarlo. Limpiar una emboscada guarda un punto de control y repone salud y granadas. Al continuar tras perder, volvés al último control; si llegaste al jefe, conserva el daño recibido. Continuar cuesta la mitad del puntaje.
 - **Zorra Blindada:** golpeá junto al vehículo para subirte; abajo + salto te baja.
 

@@ -269,6 +269,8 @@ export class Audio2 {
         break;
       case 'eshot': tone(746, .105, 'sawtooth', .034, .53); break;
       case 'empty': tone(172, .08, 'triangle', .14, .52); noise(.052, .07, 2700); break;
+      case 'bark': tone(168, .13, 'sawtooth', .12, .68); noise(.096, .085, 1130); break;
+      case 'crate': noise(.17, .22, 2710); tone(139, .108, 'triangle', .11, .61); break;
       case 'hit': tone(239, .04, 'triangle', .045, .6); break;
       case 'mhit': noise(.093, .28, 4620); tone(141, .124, 'triangle', .24, .43); break;
       case 'melee': noise(.12, .12, 3920 + (e.a ?? 0) * 1400); break;
@@ -312,7 +314,11 @@ export class Audio2 {
         break;
       case 'parry': tone(1570, .163, 'triangle', .215, 1.86); tone(450, .14, 'sine', .12, 2.14); break;
       case 'clang': tone(1830, .078, 'square', .065, .64); noise(.038, .065, 5590); break;
-      case 'warn': riff([75, 75], .092, 'square', .095); break;
+      case 'warn': {
+        const alert = [75, 73, 79, 76, 77][this.level] ?? 75;
+        riff([alert - 3, alert], .092, 'square', .095);
+        break;
+      }
       case 'bosswarn': this.duck(now, .38); riff([48, 48, 54], .16, 'sawtooth', .127); break;
       case 'bossphase': this.duck(now, .43); riff(e.a === 3 ? [57, 63, 69] : [48, 54, 60], .108, 'sawtooth', .13); break;
       case 'boss': tone(75, .72, 'sine', .47, .52); noise(.44, .24, 2930); break;
