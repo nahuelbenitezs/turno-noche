@@ -1,59 +1,281 @@
-import { CHARS, ENDING, STORY } from './sim/data';
+import { CHARS, ENDING, ENEMIES, STORY } from './sim/data';
+import type { StoryLine } from './sim/data';
 import { LEVELS } from './sim/levels';
 import type { GameState } from './sim/sim';
 
 export type MenuView = 'main' | 'keys' | 'join' | 'creating' | 'missions' | 'settings';
 export interface UiContext {
-  s: GameState; mode: 'menu' | 'local' | 'host' | 'guest'; menuView: MenuView;
-  paused: boolean; netDown: boolean; room: string; guestSlot: number; localSlot: number;
-  portraits: string[]; error: string; muted: boolean; reducedMotion: boolean; lowFx: boolean;
-  best: number; touch: boolean; connecting: boolean;
+  s: GameState;
+  mode: 'menu' | 'local' | 'host' | 'guest';
+  menuView: MenuView;
+  paused: boolean;
+  netDown: boolean;
+  room: string;
+  guestSlot: number;
+  localSlot: number;
+  portraits: string[];
+  error: string;
+  muted: boolean;
+  reducedMotion: boolean;
+  lowFx: boolean;
+  best: number;
+  touch: boolean;
+  connecting: boolean;
 }
+
 const asset = (name: string) => `${import.meta.env.BASE_URL}arte/${name}.webp`;
+const scenes = ['barrio', 'puerto', 'tren', 'torre', 'nave'];
+const routeNames = ['Barrio', 'Puerto', 'Tren', 'Torre', 'Nodriza'];
+const routeColors = ['#ffc266', '#7ce6c9', '#ff9f76', '#b5a2ff', '#ffc073'];
+const scene = (i: number) => `--scene:url('${asset(`fondo${i + 1}-${scenes[i]}`)}');--scene-accent:${routeColors[i]}`;
+const points = (score: number) => score.toLocaleString('es-UY');
+const number = (i: number) => String(i + 1).padStart(2, '0');
+
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-const button = (a: string, label: string, alt = true) => `<button class="m ${alt ? 'alt' : ''}" data-a="${a}">${label}</button>`;
-const eyebrow = (s: string) => `<div class="eyebrow"><i></i>${s}</div>`;
-const head = (tag: string, title: string, sub: string) => `${eyebrow(tag)}<h2>${title}</h2><p class="note">${sub}</p>`;
-export const KEYS = `<div class="keys"><div><h3>01 / Teclado</h3><p>Mover <kbd>W A S D</kbd></p><p>Disparo <kbd>J</kbd> · Salto <kbd>K</kbd></p><p>Golpe <kbd>L</kbd> · Especial <kbd>I</kbd></p><p>Dash <kbd>U</kbd> · Granada <kbd>O</kbd></p></div><div><h3>02 / Teclado</h3><p>Mover <kbd>← ↑ ↓ →</kbd></p><p>Disparo <kbd>,</kbd> · Salto <kbd>.</kbd></p><p>Golpe <kbd>/</kbd> · Especial <kbd>Ñ</kbd></p><p>Dash <kbd>Shift der.</kbd> · Granada <kbd>Enter</kbd></p></div><div><h3>03–04 / Mandos</h3><p>Mover con stick o cruz</p><p>Disparo <kbd>X / RT</kbd> · Salto <kbd>A</kbd></p><p>Golpe <kbd>B</kbd> · Especial <kbd>Y</kbd></p><p>Dash <kbd>LB</kbd> · Granada <kbd>RB</kbd></p></div></div><div class="tips"><b>MANUAL DEL LABURANTE</b><span>Devolvé balas con un golpe. Golpeá en el aire para hacer una picada. Quedate junto a un compañero caído para levantarlo. Encadená bajas y activá el frenesí del equipo.</span></div>`;
-const stats = (s: GameState) => [['BAJAS', s.stats.kills], ['RESCATES', s.stats.rescued], ['MEJOR COMBO', s.stats.bestCombo], ['CAÍDAS', s.stats.deaths]].map(([label, value]) => `<div><b>${value}</b><span>${label}</span></div>`).join('');
-const route = (idx: number) => `<div class="mission-route">${LEVELS.map((l, i) => `<div class="${i === idx ? 'current' : i < idx ? 'done' : ''}"><b>${i < idx ? '✓' : `0${i + 1}`}</b><span>${['EL BARRIO', 'EL PUERTO', 'ÚLTIMO TREN', 'LA TORRE', 'LA NAVE'][i]}</span></div>`).join('')}</div>`;
+
+const button = (action: string, label: string, primary = false) =>
+  `<button class="m${primary ? '' : ' alt'}" data-a="${action}">${label}</button>`;
+
+const footer = (...actions: string[]) => `<div class="row">${actions.join('')}</div>`;
+const heading = (title: string, note = '') =>
+  `<header class="screen-head"><h2>${title}</h2>${note ? `<p class="note">${note}</p>` : ''}</header>`;
+
+const panel = (className: string, content: string) => `<section class="screen ${className}">${content}</section>`;
+const setting = (action: string, label: string, on: boolean, onLabel: string, offLabel: string) =>
+  `<button class="m alt setting" data-a="${action}" aria-pressed="${on}">
+    <span>${label}</span><b>${on ? onLabel : offLabel}</b>
+  </button>`;
+
+const controls = [
+  ['Mover', 'W A S D', '← ↑ ↓ →', 'Stick / Cruz'],
+  ['Disparar', 'J', ',', 'X / RT'],
+  ['Saltar', 'K', '.', 'A'],
+  ['Golpear', 'L', '/', 'B'],
+  ['Especial', 'I', 'Ñ', 'Y'],
+  ['Esquivar', 'U', 'Shift der.', 'LB / LT'],
+  ['Granada', 'O', 'Enter', 'RB'],
+];
+
+export const KEYS = `<div class="keys">
+  <table aria-label="Controles por dispositivo">
+    <thead><tr><th scope="col">Acción</th><th scope="col">Teclado 1</th><th scope="col">Teclado 2</th><th scope="col">Mando</th></tr></thead>
+    <tbody>${controls.map(([action, ...keys]) => `<tr><th scope="row">${action}</th>${keys.map(key => `<td><kbd>${key}</kbd></td>`).join('')}</tr>`).join('')}</tbody>
+  </table>
+  <div class="combat-guide">
+    <h3>Ganá espacio</h3>
+    <p>Golpeá un proyectil para devolverlo. Golpeá en el aire para caer en picada.</p>
+    <p>Esquivá en el último instante para cargar tu especial y el frenesí del equipo.</p>
+    <h3>Cuidá a la cuadrilla</h3>
+    <p>Quedate al lado de un compañero caído para levantarlo. Rescatá prisioneros para conseguir suministros.</p>
+  </div>
+</div>`;
+
+function route(index: number, completed = false) {
+  return `<ol class="mission-route" aria-label="Ruta de campaña">
+    ${LEVELS.map((lv, i) => {
+      const done = i < index || (completed && i === index);
+      return `<li class="${done ? 'done' : i === index ? 'current' : ''}"${i === index && !completed ? ' aria-current="step"' : ''} title="${esc(lv.name)}">
+        <b aria-hidden="true">${done ? '✓' : number(i)}</b><span>${routeNames[i]}</span>
+      </li>`;
+    }).join('')}
+  </ol>`;
+}
+
+function tally(s: GameState) {
+  const elapsed = Math.floor(s.stats.ticks / 60);
+  const time = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
+  const entries = [
+    ['Bajas', s.stats.kills], ['Rescates', s.stats.rescued], ['Mejor combo', s.stats.bestCombo],
+    ['Proyectiles devueltos', s.stats.parries], ['Esquivas perfectas', s.stats.dodges], ['Tiempo activo', time],
+  ] as const;
+  return `<dl class="tally" aria-label="Estadísticas acumuladas de campaña">
+    ${entries.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
+  </dl>`;
+}
+
+function title(c: UiContext) {
+  return panel('title', `
+    <header class="title-top">
+      <span class="brand-mark" aria-label="Turno Noche"><i aria-hidden="true"></i><span>TURNO<br>NOCHE</span></span>
+      <div class="title-utils">
+        ${button('keys', 'Cómo jugar')}
+        ${button('settings', 'Ajustes')}
+        <button class="icon-btn fullscreen-btn" data-a="fullscreen" aria-label="Pantalla completa">⛶</button>
+      </div>
+    </header>
+    <div class="cover-art" style="background-image:url('${asset('portada')}')" aria-hidden="true"></div>
+    <div class="title-content">
+      <h1 class="logo">Turno <span>Noche</span></h1>
+      <p class="title-tag">Se robaron el sol.<br>Nos dejaron las horas extra.</p>
+      <div class="main-actions">
+        <button class="m primary" data-a="local"><span>Entrar de turno<small>Campaña local</small></span><b aria-hidden="true">↗</b></button>
+        <div class="online-actions">${button('host', 'Crear sala online')}${button('join', 'Tengo un código')}</div>
+      </div>
+      <p class="err" role="alert">${esc(c.error)}</p>
+    </div>
+    <footer class="title-bottom">
+      <span class="title-players"><i class="live-dot" aria-hidden="true"></i> 1–4 jugadores <span>· Local y online</span></span>
+      <button class="text-btn" data-a="missions">Ver las 5 misiones <span aria-hidden="true">↗</span></button>
+      <span class="record">Récord local <b>${points(c.best)}</b></span>
+    </footer>`);
+}
+
+function menu(c: UiContext) {
+  switch (c.menuView) {
+    case 'keys':
+      return panel('controls-screen', `${heading('Cómo jugar', 'Esc o P abre la pausa. M cambia el sonido.')}
+        ${KEYS}${button('back', 'Volver al inicio', true)}`);
+    case 'settings':
+      return panel('settings-screen', `${heading('Ajustes', 'Tus preferencias se guardan en este dispositivo.')}
+        <div class="settings-list">
+          ${setting('sound', 'Sonido', !c.muted, 'Encendido', 'Apagado')}
+          ${setting('motion', 'Movimiento reducido', c.reducedMotion, 'Sí', 'No')}
+          ${setting('quality', 'Efectos livianos', c.lowFx, 'Sí', 'No')}
+          ${button('fullscreen', 'Pantalla completa <b aria-hidden="true">⛶</b>')}
+        </div>${button('back', 'Listo', true)}`);
+    case 'join':
+      return panel('join-screen', `${heading('Entrar a una sala', 'Pedile el código de cinco letras a quien creó la partida.')}
+        <div class="code-box">
+          <label for="code">Código de sala</label>
+          <input class="code" id="code" maxlength="5" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="room-error">
+        </div>
+        <p class="err" id="room-error" role="alert">${esc(c.error)}</p>
+        ${footer(button('back', 'Volver'), button('dojoin', 'Entrar al turno →', true))}`);
+    case 'creating':
+      return panel('connection-screen', `<div class="loader" aria-hidden="true"></div>
+        <div role="status">${heading(c.connecting ? 'Buscando la sala…' : 'Preparando el turno…')}</div>
+        ${button('cancelnet', 'Cancelar')}`);
+    case 'missions':
+      return panel('dossier', `${heading('La ruta del amanecer', 'Cinco misiones para recuperar el sol.')}
+        <div class="missions">${LEVELS.map((lv, i) => {
+          const boss = lv.arenas.find(a => a.boss)?.boss;
+          return `<article style="${scene(i)}"><span class="mission-number">${number(i)}</span><div>
+            <h3>${esc(lv.name)}</h3><p>${esc(lv.objective)}</p>
+            ${boss ? `<p class="mission-boss">${esc(ENEMIES[boss].name ?? '')}</p>` : ''}
+          </div></article>`;
+        }).join('')}</div>
+        ${footer(button('back', 'Volver'), button('local', 'Entrar de turno →', true))}`);
+    default:
+      return title(c);
+  }
+}
+
+function selection(c: UiContext) {
+  const players = c.s.players.filter(p => p.joined);
+  const allReady = players.length > 0 && players.every(p => p.ready);
+  const me = c.s.players[c.mode === 'guest' ? c.guestSlot : c.localSlot];
+  const cards = CHARS.map((ch, i) => {
+    const here = players.filter(p => p.cursor === i);
+    const owner = here.find(p => p.ready);
+    const locked = !!owner && owner.slot !== me?.slot;
+    const status = owner ? (locked ? `J${owner.slot + 1} · Reservado` : 'Ya elegiste') : here.length ? here.map(p => `J${p.slot + 1}`).join(' · ') : '';
+    const color = ch.color.toString(16).padStart(6, '0');
+    return `<button class="card${here.length ? ' hot' : ''}${owner ? ' confirmed' : ''}${locked ? ' locked' : ''}"
+      data-card="${i}" style="--c:#${color}" ${locked ? 'disabled' : ''} aria-label="${ch.name}${owner ? `, reservado por jugador ${owner.slot + 1}` : ', elegir personaje'}">
+      <div class="portrait-wrap"><img src="${c.portraits[i] ?? ''}" alt="" width="136" height="136"><span>${status}</span></div>
+      <span class="card-role">${ch.role}</span>
+      <strong class="card-name">${ch.name}</strong>
+      <p class="char-desc">${ch.desc}</p>
+      <div class="stat" aria-label="Vida ${ch.hp}, velocidad ${ch.speed}">
+        <span>Vida</span><i style="--stat:${ch.hp / 1.4}%"></i>
+        <span>Velocidad</span><i style="--stat:${ch.speed / 5.1 * 100}%"></i>
+      </div>
+      <div class="special-info"><strong><span aria-hidden="true">✦</span> ${ch.special}</strong><p>${ch.specialDesc}</p></div>
+    </button>`;
+  }).join('');
+  const roster = c.s.players.map(p => `<li class="roster-slot${p.joined ? ' joined' : ''}${p.ready ? ' ready' : ''}">
+    <b>J${p.slot + 1}</b><span>${p.joined ? CHARS[p.cursor].name : 'Lugar libre'}</span>${p.joined ? `<i>${p.ready ? 'Listo ✓' : 'Eligiendo'}</i>` : ''}
+  </li>`).join('');
+  const tip = c.mode === 'guest' ? `Sos J${c.guestSlot + 1}. El anfitrión arranca cuando todos estén listos.`
+    : c.mode === 'host' ? 'Compartí la invitación y arrancá cuando todos estén listos.'
+    : c.touch ? 'Tocá una carta para confirmar tu personaje.' : 'Elegí una carta o sumá jugadores con J, coma o A. Usá izquierda y derecha para elegir.';
+  return panel('select-screen', `<header class="selection-heading">
+    <h2>Armá la cuadrilla<span>.</span></h2>
+    <div class="lobby-meta">${c.room ? `<span>Sala <b class="roomcode">${esc(c.room)}</b></span>
+      <button class="icon-btn" data-a="invite">Copiar invitación ↗</button>` : '<span>Cooperativo local</span>'}</div>
+    </header>
+    <ol class="roster" aria-label="Cuadrilla">${roster}</ol>
+    <div class="cards">${cards}</div>
+    <footer class="selection-footer">
+      <p class="hint">${tip}</p>
+      ${footer(button('reload', 'Salir'), me?.ready || players.length > 0 && !c.touch ? button('unready', 'Cambiar personaje') : '',
+        c.mode !== 'guest' ? `<button class="m" data-a="begin" ${allReady ? '' : 'disabled'}>Arrancar turno →</button>` : '')}
+    </footer>`);
+}
+
+function dialogue(c: UiContext, line: StoryLine, total: number, next: string) {
+  const char = CHARS.findIndex(ch => ch.name === line.who);
+  const portrait = char < 0
+    ? '<div class="speaker-mark" aria-hidden="true">✦</div>'
+    : `<img src="${c.portraits[char] ?? ''}" alt="" width="84" height="84">`;
+  const steps = Array.from({ length: total }, (_, i) => `<i class="${i === c.s.line ? 'current' : ''}"></i>`).join('');
+  return `<div class="bubble">
+    ${portrait}
+    <div class="speech" aria-live="polite"><b>${esc(line.who)}</b><p>${esc(line.text)}</p></div>
+    <div class="dialogue-actions">
+      <span class="dialogue-route" aria-label="Diálogo ${c.s.line + 1} de ${total}">${steps}</span>
+      ${button('next', next, true)}
+    </div>
+  </div>`;
+}
 
 export function screenHtml(c: UiContext): string {
   const { s } = c;
-  if (c.mode === 'menu') {
-    if (c.menuView === 'keys') return `<section class="screen">${head('CAPACITACIÓN SIN SUELDO', 'Aprendé en el turno', 'Teclado, mando o pantalla táctil. Todos contra la Gerencia.')}${KEYS}${button('back', 'Volver al inicio')}</section>`;
-    if (c.menuView === 'settings') return `<section class="screen">${head('PONETE CÓMODO', 'Tu turno, tus reglas', 'Las preferencias se guardan en este dispositivo.')}<div class="settings-list">${button('sound', `Sonido <b>${c.muted ? 'APAGADO' : 'ENCENDIDO'}</b>`)}${button('motion', `Movimiento reducido <b>${c.reducedMotion ? 'SÍ' : 'NO'}</b>`)}${button('quality', `Efectos <b>${c.lowFx ? 'LIVIANOS' : 'COMPLETOS'}</b>`)}${button('fullscreen', 'Pantalla completa <b>⛶</b>')}</div>${button('back', 'Listo', false)}</section>`;
-    if (c.menuView === 'join') return `<section class="screen join-screen">${head('FICHÁ CON TU EQUIPO', 'Entrar a una sala', 'Pedile las cinco letras a quien creó la partida.')}<div class="code-box"><label for="code">CÓDIGO DE TURNO</label><input class="code" id="code" maxlength="5" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Código de sala"></div><p class="err" role="alert">${esc(c.error)}</p><div class="row">${button('dojoin', 'Entrar al turno →', false)}${button('back', 'Volver')}</div><p class="note">Un personaje por persona · Hasta 4 jugadores · También en celular</p></section>`;
-    if (c.menuView === 'creating') return `<section class="screen">${eyebrow('CONECTANDO AL EQUIPO')}<div class="loader" aria-hidden="true"></div><h2>${c.connecting ? 'Buscando la sala…' : 'Preparando el turno…'}</h2><p class="note">Estamos conectando con la central. Puede llevar unos segundos.</p>${button('cancelnet', 'Cancelar')}</section>`;
-    if (c.menuView === 'missions') return `<section class="screen dossier">${head('EXPEDIENTE / OPERACIÓN AMANECER', 'Cinco escalas. Cero horas extra.', 'Recuperá el sol que la Gerencia guardó en una bolsa de consorcio.')}<div class="missions">${LEVELS.map((l, i) => `<article style="--scene:url('${asset(`fondo${i + 1}-${['barrio', 'puerto', 'tren', 'torre', 'nave'][i]}`)}')"><b>0${i + 1}</b><div><h3>${l.name}</h3><p>${l.objective}</p></div></article>`).join('')}</div><div class="row">${button('local', 'Entrar de turno →', false)}${button('back', 'Volver')}</div></section>`;
-    return `<section class="screen title"><div class="cover-art" style="background-image:url('${asset('portada')}')"></div><div class="cover-shade"></div><div class="title-top"><span class="brand-mark">TN<span>EST. 03:00 AM</span></span><div class="title-utils">${button('keys', 'Cómo jugar')}${button('settings', 'Ajustes')}<button class="icon-btn" data-a="fullscreen" aria-label="Pantalla completa">⛶</button></div></div><div class="title-content">${eyebrow('ACCIÓN COOPERATIVA DE BARRIO')}<h1 class="logo">TURNO<span>NOCHE<span class="logo-star">✦</span></span></h1><p class="title-tag">Se robaron el sol.<br>Nos dejaron las horas extra.</p><div class="main-actions"><button class="m primary" data-a="local"><span><small>01 / CAMPAÑA LOCAL</small>Entrar de turno</span><b>↗</b></button><div class="online-actions"><button class="m alt" data-a="host"><span>＋</span> Crear sala online</button><button class="m alt" data-a="join">Tengo un código →</button></div></div><p class="err" role="alert">${esc(c.error)}</p></div><div class="title-bottom"><span><i class="live-dot"></i> 1–4 JUGADORES <em>LOCAL + ONLINE</em></span><button class="text-btn" data-a="missions">5 MISIONES · CONOCÉ EL PLAN ↗</button><span class="record">RÉCORD <b>${String(c.best).padStart(7, '0')}</b></span></div></section>`;
-  }
-  if (c.netDown) return `<section class="screen">${head('LA CENTRAL NO CONTESTA', 'Se cortó la conexión', 'La sala ya no está disponible. Podés crear otra y volver a reunir al equipo.')}${button('reload', 'Volver al inicio', false)}</section>`;
-  if (c.paused) return `<section class="screen pause-screen">${head(c.mode === 'local' ? 'DESCANSO REGLAMENTARIO' : 'LA PARTIDA SIGUE EN MARCHA', c.mode === 'local' ? 'Pausa para el mate.' : 'Volvé cuando estés listo.', c.mode === 'local' ? 'El amanecer puede esperar un minuto.' : 'Tus compañeros siguen jugando mientras mirás este menú.')}${KEYS}<div class="row">${button('resume', 'Volver al turno →', false)}${button('sound', c.muted ? 'Activar sonido' : 'Silenciar')}${button('reload', 'Salir al inicio')}</div></section>`;
-  if (s.phase === 'select') {
-    const players = s.players.filter(p => p.joined), allReady = players.length > 0 && players.every(p => p.ready);
-    const me = s.players[c.mode === 'guest' ? c.guestSlot : c.localSlot];
-    const cards = CHARS.map((ch, i) => {
-      const here = players.filter(p => p.cursor === i), owner = here.find(p => p.ready), locked = !!owner && owner.slot !== me?.slot;
-      return `<button class="card ${here.length ? 'hot' : ''} ${owner ? 'confirmed' : ''} ${locked ? 'locked' : ''}" data-card="${i}" style="--c:#${ch.color.toString(16).padStart(6, '0')}" ${locked ? 'disabled' : ''} aria-label="${ch.name}${owner ? `, reservado por jugador ${owner.slot + 1}` : ', elegir personaje'}"><div class="card-top"><span>0${i + 1}</span><span>${owner ? `J${owner.slot + 1} · LISTO ✓` : 'DISPONIBLE'}</span></div><div class="portrait-wrap"><img src="${c.portraits[i]}" alt="" width="124" height="124"></div><small>${ch.role}</small><b>${ch.name}</b><p class="char-desc">${ch.desc}</p><div class="stat"><span>VIDA</span><i style="width:${ch.hp / 1.4}%"></i><span>VELOCIDAD</span><i style="width:${ch.speed * 19}%"></i></div><div class="special-info"><strong>★ ${ch.special}</strong><p>${ch.specialDesc}</p></div><div class="card-foot">${owner ? (locked ? 'PERSONAJE RESERVADO' : 'YA ESTÁS EN EL EQUIPO') : 'ELEGIR →'}</div></button>`;
-    }).join('');
-    const roster = s.players.map(p => `<div class="roster-slot ${p.joined ? 'joined' : ''}"><b>J${p.slot + 1}</b><span>${p.joined ? CHARS[p.cursor].name : 'Lugar libre'}</span><i>${p.joined ? p.ready ? 'LISTO ✓' : 'ELIGIENDO' : '＋'}</i></div>`).join('');
-    return `<section class="screen select-screen"><div class="selection-heading"><div>${eyebrow('CUATRO LABURANTES. UN SOLO AMANECER.')}<h2>Armá la cuadrilla.</h2></div><div class="lobby-meta">${c.room ? `<span>SALA <b class="roomcode">${c.room}</b></span><button class="icon-btn" data-a="invite">Copiar invitación ↗</button>` : `<span>COOPERATIVO LOCAL <b>${players.length}/4</b></span>`}</div></div><div class="roster">${roster}</div><div class="cards">${cards}</div><div class="selection-footer"><p class="hint">${c.mode === 'guest' ? `Sos J${c.guestSlot + 1}. Elegí un personaje disponible.` : players.length === 0 ? 'Elegí una carta · J / , para sumar teclados · A en un mando' : 'Personajes únicos. J / , / A suma jugadores. L cancela tu elección.'}</p><div class="row">${button('reload', '← Salir')}${me?.ready ? button('unready', 'Cambiar personaje') : ''}${c.mode !== 'guest' ? `<button class="m" data-a="begin" ${allReady ? '' : 'disabled'}>Arrancar turno →</button>` : ''}</div></div>${c.mode === 'host' ? '<p class="lobby-note">Compartí el código y esperá a tus amigos. Vos decidís cuándo arrancar.</p>' : c.mode === 'guest' ? '<p class="lobby-note">Esperando a que el anfitrión arranque el turno.</p>' : '<p class="lobby-note">Confirmá y apretá Arrancar turno cuando esté toda la cuadrilla.</p>'}</section>`;
-  }
+  if (c.mode === 'menu') return menu(c);
+  if (c.netDown) return panel('connection-screen', `${heading('Se cortó la conexión', 'La sala dejó de responder. Podés volver al inicio y reunir al equipo.')}
+    ${button('reload', 'Volver al inicio', true)}`);
+  if (c.paused) return panel('pause-screen', `${heading(c.mode === 'local' ? 'Pausa para el mate.' : 'Menú de partida',
+    c.mode === 'local' ? '' : 'La partida sigue en marcha para el resto del equipo.')}
+    ${KEYS}${footer(button('reload', 'Salir al inicio'), button('sound', c.muted ? 'Activar sonido' : 'Silenciar'), button('resume', 'Volver al turno →', true))}`);
+
+  const lv = LEVELS[s.levelIdx];
+  if (s.phase === 'select') return selection(c);
   if (s.phase === 'story') {
-    const line = STORY[s.levelIdx][s.line]; if (!line) return '';
-    const lv = LEVELS[s.levelIdx];
-    return `<section class="screen story" style="--story-bg:url('${asset(`fondo${s.levelIdx + 1}-${['barrio', 'puerto', 'tren', 'torre', 'nave'][s.levelIdx]}`)}')">${route(s.levelIdx)}<div class="briefing"><div>${eyebrow(`MISIÓN 0${s.levelIdx + 1} / 05`)}<h2>${lv.name}</h2><p>${lv.objective}</p></div><span class="brief-stamp">OPERACIÓN<br>AMANECER</span></div><div class="bubble"><b>${esc(line.who)}</b><p>${esc(line.text)}</p><button class="text-btn" data-a="next">SEGUIR →</button></div><p class="more">Disparar, saltar o tocar seguir</p></section>`;
+    const lines = STORY[s.levelIdx];
+    const line = lines[s.line];
+    if (!line) return '';
+    return `<section class="screen story" style="${scene(s.levelIdx)}">
+      ${route(s.levelIdx)}
+      <header class="briefing">
+        <p class="chapter">${number(s.levelIdx)} / ${LEVELS.length} · Misión</p>
+        <h2>${esc(lv.name)}</h2>
+        <p>${esc(lv.objective)}</p>
+      </header>
+      ${dialogue(c, line, lines.length, s.line === lines.length - 1 ? 'Empezar →' : 'Seguir →')}
+      <p class="more">${c.touch ? 'Tocá el botón para seguir.' : 'Salto o disparo para seguir'}</p>
+    </section>`;
   }
   if (s.phase === 'clear') {
     const rank = s.stats.deaths === 0 ? 'S' : s.stats.bestCombo >= 20 ? 'A' : 'B';
-    return `<section class="screen results">${eyebrow(`MISIÓN 0${s.levelIdx + 1} COMPLETADA`)}<div class="result-heading"><span class="rank">${rank}</span><div><h2>¡Turno impecable!</h2><p class="note">${['El barrio vuelve a respirar. El puerto espera.', 'Aduana aprobó tu exceso de explosivos.', 'Próxima parada: antenas y problemas.', 'Sin señal. Sin colmena. Sin paciencia.', 'La Gerencia perdió la reunión.'][s.levelIdx]}</p></div></div><p class="bignum">${s.score.toLocaleString('es-UY')} <small>PTS</small></p><div class="tally">${stats(s)}</div>${route(s.levelIdx)}${button('next', s.levelIdx === 4 ? 'Devolvé el amanecer →' : 'Siguiente misión →', false)}</section>`;
+    return `<section class="screen results" style="${scene(s.levelIdx)}">
+      ${route(s.levelIdx, true)}
+      <div class="result-heading"><span class="rank" aria-label="Rango ${rank}">${rank}</span>
+        <div><p class="chapter">Misión ${number(s.levelIdx)} completada</p><h2>${esc(lv.name)}</h2>
+        <p class="bignum">${points(s.score)} <small>PTS DE CAMPAÑA</small></p></div>
+      </div>
+      ${tally(s)}
+      ${button('next', s.levelIdx === LEVELS.length - 1 ? 'Devolvé el amanecer →' : 'Siguiente misión →', true)}
+    </section>`;
   }
-  if (s.phase === 'gameover') return `<section class="screen">${head('NO FUE UNA RENUNCIA', 'Nos vemos en cinco.', 'El jefe conserva el daño recibido. Continuar cuesta la mitad del puntaje.')}<div class="tally">${stats(s)}</div>${button('next', 'Volver al trabajo →', false)}${button('reload', 'Cerrar el turno')}</section>`;
+  if (s.phase === 'gameover') {
+    const retry = s.atBoss ? 'El jefe conserva el daño recibido.'
+      : s.checkpoint ? 'Volvés al último punto de control.' : 'Volvés al comienzo de la misión.';
+    return panel('results gameover', `${heading('Nos vemos en cinco.', `${retry} Continuar cuesta la mitad del puntaje.`)}
+      <p class="bignum">${points(s.score)} <small>PTS</small></p>${tally(s)}
+      ${footer(button('reload', 'Cerrar el turno'), button('next', 'Continuar →', true))}`);
+  }
   if (s.phase === 'ending') {
     const line = ENDING[s.line];
-    if (line) return `<section class="screen dawn">${head('OPERACIÓN AMANECER / COMPLETADA', 'Al fin salió el sol.', 'La ciudad duerme. La cuadrilla se ganó el descanso.')}<div class="bubble"><b>${esc(line.who)}</b><p>${esc(line.text)}</p></div>${button('next', 'Seguir →', false)}</section>`;
-    return `<section class="screen dawn">${eyebrow('SE TERMINÓ LA NOCHE')}<h2>¡Fin del turno!</h2><p class="bignum">${s.score.toLocaleString('es-UY')} <small>PTS</small></p><div class="tally">${stats(s)}</div><p class="note">Un juego de Nahuel Benítez. Nos vemos a las diez.</p>${button('next', 'Otra noche más →', false)}</section>`;
+    return panel('dawn', line
+      ? `${heading('Al fin salió el sol.')}${dialogue(c, line, ENDING.length, 'Seguir →')}`
+      : `${route(LEVELS.length - 1, true)}${heading('Fin del turno')}
+        <p class="bignum">${points(s.score)} <small>PTS FINALES</small></p>
+        ${tally(s)}<p class="note">Un juego de Nahuel Benítez.</p>
+        ${button('next', 'Otra noche más →', true)}`);
   }
-  return `<div class="play-tools"><span id="net-status"></span><button class="icon-btn" data-a="sound" aria-label="Cambiar sonido">${c.muted ? 'SONIDO OFF' : 'SONIDO ON'}</button><button class="icon-btn" data-a="pause" aria-label="${c.mode === 'local' ? 'Pausa' : 'Menú de partida'}">Ⅱ</button></div>`;
+  return `<div class="play-tools">
+    <span id="net-status"></span>
+    <button class="icon-btn" data-a="sound" aria-label="Sonido" aria-pressed="${!c.muted}">${c.muted ? 'SONIDO OFF' : 'SONIDO ON'}</button>
+    <button class="icon-btn" data-a="pause" aria-label="${c.mode === 'local' ? 'Pausa' : 'Menú de partida'}">Ⅱ</button>
+  </div>`;
 }

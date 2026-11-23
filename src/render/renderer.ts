@@ -1,14 +1,16 @@
 // Dibuja el estado de la simulación con PixiJS (WebGL). No toma decisiones de juego.
 import { Application, Container, Graphics, Sprite, Text, Texture, TilingSprite } from 'pixi.js';
 import { CHARS, EnemyType, H, W, isBoss } from '../sim/data';
-import { LEVELS } from '../sim/levels';
-import { Bullet, Enemy, Ev, GameState, Player } from '../sim/sim';
-import { BOSS_SHEET, Frame, HEROES, Sheet, beamTex, chunkTex, glowTex, loadArt, vignetteTex } from './art';
+import { LEVELS, hazardZone } from '../sim/levels';
+import { Bullet, Enemy, Ev, GameState, Player, bossAttackBounds } from '../sim/sim';
+import { BOSS_SHEET, Frame, HEROES, Sheet, actionArt, beamTex, chunkTex, glowTex, loadArt, vignetteTex } from './art';
+import { THEME_LIGHT, buildScenery, drawTrainWindows, stageMotifs } from './scene';
 
 const screenY = (y: number, z: number) => y - 80 + z;
 const FLOOR_SRC = 572 / 941; // Altura del piso dentro de las imágenes de fondo
 const PLAYER_TINT = [0xff5a4e, 0x4ea8ff, 0x7dff6a, 0xffd23f];
 const CHUNK = [0x7fd34a, 0x6b3fa0, 0xc0392b, 0x8d99ae, 0xffd23f];
+const RECORD_COLOR = 0xcfa4ff;
 const ENEMY_ROW: Partial<Record<EnemyType, number>> = { grunt: 0, rusher: 1, flyer: 2, shield: 3, lobber: 4, turret: 5, exploder: 6, heavy: 7 };
 /** Alto en pantalla de cada enemigo. */
 const ENEMY_H: Record<string, number> = { grunt: 88, rusher: 66, flyer: 60, shield: 92, lobber: 90, turret: 70, exploder: 62, heavy: 128, camion: 190, grua: 170, loco: 170, colmena: 340, gerenta: 170 };
@@ -17,27 +19,25 @@ const OBJ_SIZE: Record<string, number> = { crate: 46, barrel: 56, prisoner: 62, 
 const FX = { slash: 0, spark: 1, boom: 2, dust: 3, fire: 4, heal: 5 };
 const heroFrame = (r: number, c: number) => r * 6 + c;
 
-interface Part { s: Sprite; vx: number; vy: number; g: number; life: number; max: number; spin: number; grow: number; alpha?: number }
-interface Rig { c: Container; body: Sprite; veh: Sprite; tag: Text; char: number; k: number }
-const THEME_LIGHT = [0xffb65a, 0x59cde8, 0xff876c, 0x95a0ff, 0x75f0bf];
-const SIGNS = [
-  ['PAN CALIENTE', 'NO HAY SOL. HAY FIADO.', 'DELIVERY 24 HS'],
-  ['MUELLE 04', 'NO ALIMENTAR A LA GRÚA', 'SOL: FRÁGIL'],
-  ['PRÓXIMA: NINGUNA', 'NO ASOMAR LA CABEZA', 'ÚLTIMO SERVICIO'],
-  ['SIN SEÑAL', 'NO ES EL ROUTER', 'COLMENA S.A.'],
-  ['RECURSOS INHUMANOS', 'SONREÍ. ESTÁS EN TURNO.', 'HORAS EXTRA: 0'],
-];
+interface Part { s: Sprite; vx: number; vy: number; g: number; life: number; max: number; spin: number; grow: number; alpha?: number; frames?: Texture[] }
+interface Rig { c: Container; body: Sprite; veh: Sprite; tag: Text; char: number; k: number; gait: number; z: number; grounded: boolean; landing: number; special: number }
 
 export class Renderer {
   app = new Application(); sheets: Record<string, Sheet> = {}; bgs: Texture[] = []; glow!: Texture; chunk!: Texture; beam!: Texture;
   root = new Container(); world = new Container(); levelC = new Container(); shadows = new Graphics(); actC = new Container(); fxC = new Container(); addC = new Container(); textC = new Container();
   markers = new Graphics(); hazards = new Graphics(); atmosphere = new Graphics();
   private backdrop?: TilingSprite;
+  private windows = new Graphics();
+  private animation!: ReturnType<typeof actionArt>;
+  private motifs: Texture[] = [];
+  private lights: Sprite[] = [];
+  private drawAt = 0;
+  private dt = 1;
   reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   lowFx = matchMedia('(pointer: coarse)').matches;
   private mobile = matchMedia('(pointer: coarse)').matches;
   private lastSimTick = -1;
-  private hazardLabels = new Map<number, Text>();
+  private hazardLabels = new Map<string, Text>();
   rigs = new Map<number, Rig>(); objs = new Map<number, Sprite>(); parts: Part[] = []; floats: { t: Text; life: number }[] = [];
   flash!: Graphics; levelDrawn = -1; smooth = 1; zoomPunch = 0; shakeExtra = 0; t = 0; camShown = 0;
 
@@ -46,7 +46,8 @@ export class Renderer {
     host.prepend(this.app.canvas);
     const art = await loadArt(); this.sheets = art.sheets; this.bgs = art.bgs;
     this.glow = glowTex(); this.chunk = chunkTex(); this.beam = beamTex();
-    this.actC.sortableChildren = true; this.addC.blendMode = 'add';
+    this.animation = actionArt(); this.motifs = stageMotifs();
+    this.actC.sortableChildren = true;
     this.world.addChild(this.levelC, this.hazards, this.shadows, this.actC, this.fxC, this.addC, this.markers);
     const vig = new Sprite(vignetteTex()); vig.width = W; vig.height = H;
     this.flash = new Graphics().rect(0, 0, W, H).fill(0xffffff); this.flash.alpha = 0;
@@ -57,12 +58,13 @@ export class Renderer {
   portrait(i: number) { return this.sheets[HEROES[i]][0]!; }
   private drawLevel(idx: number) {
     this.levelDrawn = idx; const lv = LEVELS[idx], tex = this.bgs[lv.theme];
+    this.windows.removeFromParent();
     this.levelC.removeChildren().forEach(c => c.destroy({ children: true }));
     // El piso de la imagen queda alineado con la zona por donde se camina.
     const k = (380 - 44) / (tex.height * FLOOR_SRC);
     const bg = new TilingSprite({ texture: tex, width: W + 4, height: H + 40 }); bg.tileScale.set(Math.max(k, H / tex.height));
     this.backdrop = bg; this.levelC.addChild(bg);
-    // El decorado se mueve más lento que el piso: profundidad sin filtros costosos.
+    this.windows.clear(); this.levelC.addChild(this.windows);
     const trim = new Graphics(); const color = THEME_LIGHT[lv.theme];
     for (let x = 80; x < lv.width; x += 340) {
       const y = 395 + (Math.floor(x / 340) % 3) * 39;
@@ -74,15 +76,8 @@ export class Renderer {
       }
     }
     this.levelC.addChild(trim);
-    // Cartelería del mundo: cada nivel tiene sus propios chistes y color.
-    for (let i = 0, x = 660; x < lv.width - 500; i++, x += 1250) {
-      const sign = new Container(); sign.position.set(x, 242 + (i % 2) * 35);
-      const words = SIGNS[lv.theme][i % 3]; const w = Math.max(132, words.length * 7 + 24);
-      const plate = new Graphics().roundRect(-w / 2, -18, w, 34, 3).fill({ color: 0x0b1020, alpha: .95 }).stroke({ color, alpha: .7, width: 1 });
-      plate.moveTo(-w / 2 + 8, 17).lineTo(-w / 2 + 8, 32).moveTo(w / 2 - 8, 17).lineTo(w / 2 - 8, 32).stroke({ color: 0x182034, width: 3 });
-      const label = new Text({ text: words, style: { fontFamily: 'monospace', fontSize: 11, fontWeight: 'bold', fill: color, letterSpacing: 1 } }); label.anchor.set(.5);
-      sign.addChild(plate, label); this.levelC.addChild(sign);
-    }
+    const scenery = buildScenery(lv.theme, lv.sections, this.motifs[lv.theme], this.glow);
+    this.levelC.addChild(scenery.layer); this.lights = scenery.lights;
     for (const label of this.hazardLabels.values()) label.destroy(); this.hazardLabels.clear();
     for (const p of this.parts) p.s.destroy(); this.parts = [];
     for (const f of this.floats) f.t.destroy(); this.floats = [];
@@ -97,33 +92,46 @@ export class Renderer {
     c.addChild(veh, body);
     const tag = new Text({ text: `J${p.slot + 1}`, style: { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 15, fontWeight: '900', fill: PLAYER_TINT[p.slot], stroke: { color: 0, width: 3 } } }); tag.anchor.set(.5, 1); tag.zIndex = 999;
     this.actC.addChild(c, tag);
-    const r: Rig = { c, body, veh, tag, char: p.char, k }; this.rigs.set(p.id, r); return r;
+    const r: Rig = { c, body, veh, tag, char: p.char, k, gait: 0, z: p.z, grounded: p.ground, landing: 0, special: 0 };
+    this.rigs.set(p.id, r); return r;
   }
-  private heroAnim(s: GameState, p: Player): number {
+  private heroAnim(s: GameState, p: Player, r: Rig, moving: boolean): number {
     const t = s.tick;
     if (p.down) return heroFrame(4, 5);
-    if (p.specialT > 0) return heroFrame(5, 2 + (t >> 2) % 4);
+    if (p.specialT > 0 && p.char === 0) return heroFrame(5, p.specialT > 42 ? 0 : p.specialT > 36 ? 1 : 2 + (t >> 2) % 4);
+    if (r.special > 0) return heroFrame(5, Math.min(5, Math.floor((24 - r.special) / 4)));
     if (p.flash > 0) return heroFrame(4, 2 + (p.flash > 6 ? 0 : 1));
-    if (p.dashT > 0) return heroFrame(2, 4 + (p.dashT > 5 ? 0 : 1));
+    if (p.dashT > 0) return heroFrame(2, p.dashT > 2 ? 4 : 5);
     if (p.meleeT > 0) {
       const total = p.meleeStep === 2 ? 18 : 14; const late = p.meleeT < total * .68 ? 1 : 0;
       return p.dive ? heroFrame(3, 5) : heroFrame(3, p.meleeStep * 2 + late);
     }
     if (p.shooting > 0) return heroFrame(4, p.shooting > 6 ? 1 : 0);
-    if (!p.ground) return heroFrame(2, p.vy < -3 ? 0 : p.vy < 3 ? 1 : 2);
-    if (Math.abs(p.vx) > .6) return heroFrame(1, (t >> 2) % 6);
+    if (!p.ground) return heroFrame(2, p.vy < -5 ? 1 : p.vy < 2 ? 2 : 3);
+    if (r.landing > 1) return heroFrame(2, 0);
+    if (moving) return heroFrame(1, Math.floor(r.gait) % 6);
     return heroFrame(0, (t >> 4) % 6);
   }
   private syncPlayer(s: GameState, p: Player) {
     const r = this.rig(p); const show = p.joined && !p.out; r.c.visible = show; r.tag.visible = show && s.phase === 'play';
     if (!show) return;
-    const py = screenY(p.y, p.z), k = this.smooth;
-    r.c.x += (p.x - r.c.x) * k; r.c.y += (py - r.c.y) * k; if (Math.abs(p.x - r.c.x) > 200) r.c.position.set(p.x, py);
-    r.c.zIndex = p.z; r.tag.position.set(r.c.x, r.c.y - (p.down ? 52 : 112));
+    const py = screenY(p.y, p.z), k = 1 - (1 - this.smooth) ** this.dt;
+    const dx = p.x - r.c.x, dy = py - r.c.y;
+    const lateral = Math.abs(p.vx) > .6 || Math.abs(p.z - r.z) > .25;
+    r.c.x += dx * k; r.c.y += dy * k;
+    if (Math.abs(dx) > 180 || Math.abs(dy) > 145) r.c.position.set(p.x, py);
+    r.gait += p.ground ? Math.min(12, Math.abs(dx * k) + Math.abs(p.z - r.z)) * .055 : 0;
+    r.z = p.z;
+    r.landing = p.ground && !r.grounded ? 5 : Math.max(0, r.landing - this.dt);
+    r.grounded = p.ground; r.special = Math.max(0, r.special - this.dt);
+    r.c.zIndex = p.z; r.tag.position.set(r.c.x, r.c.y - (p.down ? 52 : 117));
     r.tag.text = p.down ? 'LEVANTAME' : !p.connected ? `J${p.slot + 1} · DESCONECTADO` : `J${p.slot + 1}`;
     r.tag.style.fill = p.down ? 0xffbc63 : PLAYER_TINT[p.slot];
-    const f = this.sheets[HEROES[p.char]][this.heroAnim(s, p)] ?? this.sheets[HEROES[p.char]][0]!;
-    this.setFrame(r.body, f); r.body.scale.set(r.k * p.face, r.k);
+    const f = this.sheets[HEROES[p.char]][this.heroAnim(s, p, r, lateral)] ?? this.sheets[HEROES[p.char]][0]!;
+    this.setFrame(r.body, f);
+    const squash = this.reducedMotion || p.down ? 0 : r.landing * .018 + (p.dashT > 0 ? .055 : 0);
+    r.body.scale.set(r.k * p.face * (1 + squash), r.k * (1 - squash));
+    r.body.rotation = this.reducedMotion || p.down || p.vehicle ? 0 : p.dive ? p.face * .2 : Math.min(1, Math.abs(p.vx) / 10) * p.face * .09;
     r.veh.visible = !!p.vehicle; if (p.vehicle) { r.veh.scale.x = Math.abs(r.veh.scale.x) * p.face; r.body.y = -26; } else r.body.y = 0;
     r.c.alpha = p.iframes > 0 && p.iframes % 8 < 4 && !p.specialT ? .55 : 1;
     r.body.tint = p.flash > 8 ? 0xff9090 : 0xffffff;
@@ -135,11 +143,12 @@ export class Renderer {
     if (isBoss(e.type)) {
       const sh = this.sheets[BOSS_SHEET[e.type]]; const blink = (e.t >> 4) % 2;
       if (e.flash > 2) return sh[4 + (e.flash > 4 ? 1 : 0)]!;
-      return sh[e.st !== 0 || e.cd > 0 && e.cd < 12 ? 2 + blink : blink]!;
+      if (e.attack) return sh[e.attack.elapsed < e.attack.tell ? 2 : 3]!;
+      return sh[blink]!;
     }
     const row = ENEMY_ROW[e.type]! * 6, sh = this.sheets.enemigos;
     if (e.flash > 1 || e.stun > 0) return sh[row + 4]!;
-    if (e.cd > 0 && e.cd < 14) return sh[row + 3]!;
+    if (e.cd > 0 && e.cd < 14) return sh[row + (e.cd < 6 ? 2 : 3)]!;
     if (e.type === 'exploder' && e.st > 0) return sh[row + 3]!;
     return sh[row + ((e.t >> 3) % 2)]!;
   }
@@ -149,16 +158,19 @@ export class Renderer {
     if (!q) {
       if (key) { const size = { bala: 20, jeringa: 32, misil: 42, harina: 26, orbe: 26, granada: 24 }[key as string] ?? 24; q = this.objSprite(key, size); q.anchor.set(.5, .5); this.fxC.addChild(q); }
       else if (b.kind === 'fuego' || b.kind === 'wave') { const f = this.sheets.efectos[FX.fire]!; q = new Sprite(f.tex); q.anchor.set(.5, .6); q.scale.set((b.kind === 'wave' ? 62 : 40) / f.bh); this.fxC.addChild(q); }
-      else { q = new Sprite(this.beam); q.anchor.set(.5); q.scale.set(1.2); this.addC.addChild(q); }
+      else { q = new Sprite(this.beam); q.anchor.set(.5); q.scale.set(1.2); q.blendMode = 'add'; this.addC.addChild(q); }
       this.objs.set(b.id, q);
     }
     q.position.set(b.x, screenY(b.y, b.z));
     if (key === 'jeringa' || key === 'misil') q.rotation = Math.atan2(b.vy, b.vx) + .4;
     else if (key === 'bala' || !key && b.kind === 'laser') q.rotation = Math.atan2(b.vy, b.vx);
-    else if (key === 'granada' || key === 'harina') q.rotation += .15;
+    else if (key === 'granada' || key === 'harina') q.rotation += .15 * this.dt;
     else if (b.kind === 'wave') { q.tint = b.side ? 0xffffff : 0xffe27a; q.scale.x = Math.abs(q.scale.x) * Math.sign(b.vx || 1); }
     else if (b.kind === 'fuego') { q.alpha = Math.min(1, b.life / 10); q.scale.x = Math.abs(q.scale.x) * Math.sign(b.vx || 1); }
-    if (newTick && b.kind === 'cohete' && s.tick % 2 === 0) this.spawn(b.x - b.vx, screenY(b.y, b.z), 0xbbbbbb, { tex: this.glow, size: .5, life: 20, v: .3, vy: -.4 });
+    if (newTick && !this.reducedMotion && b.kind === 'cohete' && s.tick % (this.lowFx ? 4 : 2) === 0) {
+      this.spawn(b.x - b.vx, screenY(b.y, b.z) - b.vy, b.side ? 0xff9464 : 0xadbad4,
+        { tex: this.animation.smoke, size: .51, life: 19, v: .3, vy: -.4, grow: .015 });
+    }
     if (b.kind === 'granada') q.tint = b.side ? 0xff8585 : 0xa8ffd9;
   }
   private drawAtmosphere(s: GameState) {
@@ -166,12 +178,18 @@ export class Renderer {
     if (s.phase !== 'play' && s.phase !== 'clear') return;
     const t = this.reducedMotion ? 0 : this.t;
     // Un único Graphics para lluvia, viento y partículas ambientales; sin sprites por gota.
-    if (theme < 2 || theme === 3) {
+    if (theme < 2) {
       const count = this.lowFx ? 16 : 42;
       for (let i = 0; i < count; i++) {
         const x = ((i * 137.7 - t * 1.7 - this.camShown * .18) % (W + 30) + W + 30) % (W + 30);
         const y = (i * 79.3 + t * 7.3) % (H + 30) - 20;
         g.moveTo(x, y).lineTo(x - 4, y + 13).stroke({ color: 0xadc7f5, width: .8, alpha: .18 });
+      }
+      if (!this.lowFx) for (let i = 0; i < 9; i++) {
+        const x = ((i * 191 - this.camShown * .85) % W + W) % W;
+        const y = 400 + i * 14;
+        const r = this.reducedMotion ? 10 : (this.t * .5 + i * 4.7) % 15;
+        g.ellipse(x, y, r, r * .26).stroke({ color: THEME_LIGHT[theme], width: 1, alpha: .19 * (1 - r / 17) });
       }
     } else if (theme === 2) {
       for (let i = 0; i < 11; i++) {
@@ -183,7 +201,9 @@ export class Renderer {
       for (let i = 0; i < (this.lowFx ? 8 : 22); i++) {
         const x = (i * 113.7 + Math.sin(t * .008 + i) * 19) % W;
         const y = ((i * 97 - t * .4) % H + H) % H;
-        g.circle(x, y, i % 3 ? 1 : 2).fill({ color: 0x75f0bf, alpha: .12 + Math.sin(t * .02 + i) * .07 });
+        const color = THEME_LIGHT[theme];
+        g.circle(x, y, i % 3 ? 1 : 2).fill({ color, alpha: .18 + Math.sin(t * .02 + i) * .07 });
+        if (theme === 3 && i % 3 === 0) g.moveTo(x, y).lineTo(x + 5, y - 9).stroke({ color, width: 1, alpha: .22 });
       }
     }
     if (s.frenzy > 0) {
@@ -199,17 +219,24 @@ export class Renderer {
     for (const p of s.players) if (p.joined && !p.out) {
       const y = screenY(p.y, p.z), color = PLAYER_TINT[p.slot];
       // La pequeña flecha identifica al jugador entre explosiones y a sus compañeros caídos.
-      if (!p.down) g.poly([p.x - 4, y - 109, p.x + 4, y - 109, p.x, y - 103]).fill(color);
+      if (!p.down) g.poly([p.x - 4, y - 114, p.x + 4, y - 114, p.x, y - 108]).fill(color);
       if (p.down) {
-        g.ellipse(p.x, y - 3, 38, 13).stroke({ color: 0xffbc63, width: 2, alpha: .55 + Math.sin(this.t * .09) * .2 });
+        g.ellipse(p.x, y - 3, 38, 13).stroke({ color: 0xffbc63, width: 2, alpha: .55 + (this.reducedMotion ? 0 : Math.sin(this.t * .09) * .2) });
         g.roundRect(p.x - 28, y - 44, 56, 5, 2).fill({ color: 0x151525, alpha: .95 });
         g.roundRect(p.x - 27, y - 43, Math.max(1, Math.min(54, p.revive / 70 * 54)), 3, 1).fill(0x85f0b2);
         g.moveTo(p.x - 4, y - 24).lineTo(p.x + 4, y - 24).moveTo(p.x, y - 28).lineTo(p.x, y - 20).stroke({ color: 0xffbc63, width: 2 });
       }
+      if (p.counterT > 0 && !p.down) {
+        g.ellipse(p.x, 380 + p.z, 30, 10).stroke({ color: 0x7feaff, alpha: .72, width: 1.5 });
+        g.moveTo(p.x - 29, y - 30).lineTo(p.x - 35, y - 36).lineTo(p.x - 29, y - 42)
+          .moveTo(p.x + 29, y - 30).lineTo(p.x + 35, y - 36).lineTo(p.x + 29, y - 42)
+          .stroke({ color: 0x7feaff, alpha: .8, width: 2 });
+      }
       if ((p.dashT > 0 || p.specialT > 0) && newTick && s.tick % (this.lowFx ? 4 : 2) === 0 && !this.reducedMotion && this.parts.length < (this.lowFx ? 70 : 260)) {
         const rig = this.rigs.get(p.id)!; const sp = new Sprite(rig.body.texture);
-        sp.anchor.copyFrom(rig.body.anchor); sp.position.set(p.x - p.face * 12, y); sp.scale.copyFrom(rig.body.scale); sp.tint = CHARS[p.char].color;
-        this.fxC.addChild(sp); this.parts.push({ s: sp, vx: -p.face * .4, vy: 0, g: 0, life: 12, max: 12, spin: 0, grow: 0, alpha: .24 });
+        sp.anchor.copyFrom(rig.body.anchor); sp.position.set(p.x - p.dashX * 11, y - p.dashZ * 2);
+        sp.scale.copyFrom(rig.body.scale); sp.rotation = rig.body.rotation; sp.tint = p.counterT > 0 ? 0x7feaff : CHARS[p.char].color;
+        this.fxC.addChild(sp); this.parts.push({ s: sp, vx: -p.dashX * .5, vy: -p.dashZ * .2, g: 0, life: 12, max: 12, spin: 0, grow: 0, alpha: .25 });
       }
     }
     for (const e of s.enemies) if (visible(e.x) && e.hp > 0) {
@@ -221,15 +248,6 @@ export class Renderer {
       }
       if (e.type === 'exploder' && e.st > 0) {
         g.ellipse(e.x, 380 + e.z, 80, 22).fill({ color: 0xff443a, alpha: .12 }).stroke({ color: 0xff7a61, width: 2, alpha: .8 });
-      }
-      if ((e.type === 'grua' && e.st === 1) || (e.type === 'gerenta' && e.st === 3 && e.t < 30)) {
-        g.ellipse(e.x, 380 + e.z, e.w * .65, 19).fill({ color: 0xff553b, alpha: .18 }).stroke({ color: 0xff9b62, width: 2 });
-        g.moveTo(e.x, y).lineTo(e.x, 380 + e.z).stroke({ color: 0xffb47d, width: 1, alpha: .55 });
-      }
-      if (e.type === 'camion' && e.st === 0 && e.t > 25) {
-        const x = e.face > 0 ? e.x : this.camShown;
-        const w = Math.max(0, e.face > 0 ? this.camShown + W - e.x : e.x - this.camShown);
-        g.rect(x, 365 + e.z, w, 26).fill({ color: 0xff5543, alpha: .08 });
       }
       if (e.stun > 0 && !this.reducedMotion) {
         const a = this.t * .13;
@@ -245,13 +263,23 @@ export class Renderer {
       }
     }
     for (const k of s.pickups) if (visible(k.x)) {
-      const color = k.drop === 'food' ? 0x83efae : 0xffd45f;
-      g.ellipse(k.x, 380 + k.z, 22, 7).stroke({ color, width: 1, alpha: .55 });
+      const color = k.drop === 'food' ? 0x83efae : k.drop === 'record' ? RECORD_COLOR : 0xffd45f;
+      const y = 380 + k.z;
+      g.ellipse(k.x, y, 22, 7).stroke({ color, width: 1, alpha: .55 });
+      if (k.drop === 'record') {
+        g.ellipse(k.x, y, 33, 11).fill({ color, alpha: .13 }).stroke({ color, width: 1.5, alpha: .8 });
+        const top = y - 67 + (this.reducedMotion ? 0 : Math.sin(this.t * .1) * 3);
+        g.poly([k.x, top - 6, k.x + 6, top, k.x, top + 6, k.x - 6, top]).stroke({ color, width: 2 });
+      }
     }
     for (const b of s.bullets) if (b.kind === 'granada' && b.grav > 0 && visible(b.x)) {
       const dt = Math.min(b.life, Math.max(0, (-b.vy + Math.sqrt(Math.max(0, b.vy * b.vy + 2 * b.grav * (450 - b.y)))) / b.grav));
       const x = b.x + b.vx * dt;
       g.ellipse(x, 380 + b.z, b.side ? 25 : 18, 7).stroke({ color: b.side ? 0xff7763 : 0x8dffd2, width: 1.5, alpha: .65 });
+    }
+    for (const b of s.bullets) if (b.side === 1 && b.kind !== 'granada' && visible(b.x)) {
+      const y = screenY(b.y, b.z);
+      g.moveTo(b.x - b.vx * 1.1, y - b.vy * 1.1).lineTo(b.x, y).stroke({ color: 0xff8274, width: 2, alpha: .67 });
     }
   }
   private drawHazards(s: GameState) {

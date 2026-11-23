@@ -1,7 +1,8 @@
 // Simulación pura y determinista a 60 Hz. El estado es JSON serializable: sirve igual para jugar local,
 // para mandarlo por red y para probarlo sin navegador.
-import { BANTER, BTN, CHARS, ENDING, ENEMIES, EnemyType, H, PICKUP_WEAPONS, STORY, W, WEAPONS, WeaponId, isBoss, pickOf } from './data';
-import { Arena, LEVELS, Level, Rect } from './levels';
+import { BANTER, BTN, BossType, CHARS, ENDING, ENEMIES, EnemyType, H, PICKUP_WEAPONS, STORY, W, WEAPONS, WeaponId, isBoss, pickOf } from './data';
+import { Arena, LEVELS, Level, Rect, hazardZone } from './levels';
+import { MISSION_RECORDS } from './records';
 
 export const GRAV = 0.62, MAXFALL = 13, DEPTH = 130;
 /** Carril de profundidad del efecto o disparo que se está creando. */
@@ -11,19 +12,34 @@ export interface Player extends Body {
   slot: number; joined: boolean; ready: boolean; cursor: number; char: number; face: number;
   hp: number; maxHp: number; iframes: number; down: boolean; downT: number; out: boolean; revive: number;
   weapon: WeaponId; ammo: number; shootCd: number; ax: number; ay: number; shooting: number;
-  meleeT: number; meleeStep: number; meleeWin: number; swing: number; dive: boolean;
+  meleeT: number; meleeStep: number; meleeWin: number; meleeBuffer: number; swing: number; dive: boolean;
   dashT: number; dashCd: number; jumpsLeft: number; coyote: number; jbuf: number; crouch: boolean; dropT: number;
   buf: number; meter: number; specialT: number; vehicle: number; prev: number; flash: number; kills: number; connected: boolean;
-  grenades: number; grenadeCd: number;
+  grenades: number; grenadeCd: number; dashX: number; dashZ: number; counterT: number;
 }
-export interface Enemy extends Body { type: EnemyType; hp: number; maxHp: number; face: number; t: number; st: number; cd: number; stun: number; flash: number; arena: boolean; swings: number[]; n: number; dying?: number; announced?: number }
+export type BossAttackKind = 'charge' | 'slam' | 'sweep' | 'salvo' | 'signal' | 'reinforcements';
+type BossPattern = 'charge' | 'slam' | 'sweep' | 'mortar' | 'fan' | 'pulse' | 'ring' | 'swarm';
+export interface BossAttack {
+  kind: BossAttackKind; label: string; x: number; w: number; z: number; depth: number;
+  tell: number; duration: number; elapsed: number; dir: number;
+  pattern: BossPattern; power: number; originX: number;
+}
+export interface Enemy extends Body { type: EnemyType; hp: number; maxHp: number; face: number; t: number; st: number; cd: number; stun: number; flash: number; arena: boolean; swings: number[]; n: number; dying?: number; announced?: number; attack?: BossAttack; support?: { slot: number; until: number; readyAt: number } }
+
+export function bossAttackBounds(attack: BossAttack) {
+  const minZ = Math.max(0, attack.z - attack.depth / 2), maxZ = Math.min(DEPTH, attack.z + attack.depth / 2);
+  return { x: attack.x - attack.w / 2, w: attack.w, z: (minZ + maxZ) / 2, depth: (maxZ - minZ) / 2 };
+}
+
+export const bossPhase = (enemy: Enemy) => enemy.hp <= enemy.maxHp * .3 ? 3 : enemy.hp <= enemy.maxHp * .65 ? 2 : 1;
 export interface Bullet { id: number; z: number; x: number; y: number; vx: number; vy: number; dmg: number; life: number; kind: string; side: 0 | 1; owner: number; pierce: boolean; grav: number; r: number; hits: number[] }
 export interface Prop extends Body { kind: 'crate' | 'barrel' | 'prisoner' | 'vehicle'; hp: number; drop?: WeaponId | 'food'; freed: number }
-export interface Pickup extends Body { drop: WeaponId | 'food'; life: number }
+export type Pickup = Body & ({ drop: WeaponId | 'food'; life: number } | { drop: 'record'; life: number; record: number });
 export interface Ev { k: string; x: number; y: number; a?: number; s?: string }
 export type Phase = 'select' | 'story' | 'play' | 'clear' | 'gameover' | 'ending';
 export interface GameState {
-  autoStart: boolean; startRequested: boolean;
+  autoStart: boolean; startRequested: boolean; replay: boolean;
+  mission: { records: number; ticks: number; falls: number };
   tick: number; phase: Phase; phaseT: number; levelIdx: number; line: number; players: Player[]; enemies: Enemy[]; bullets: Bullet[]; props: Prop[]; pickups: Pickup[];
   camX: number; camLock: number; arenaIdx: number; wave: number; arenaOn: boolean; spawnIdx: number; bossId: number; clearT: number; lastHit: number; atBoss: boolean; bossKeep: number;
   lives: number; score: number; combo: number; comboT: number; hitstop: number; shake: number; slow: number; seed: number; nextId: number; events: Ev[];
@@ -31,10 +47,18 @@ export interface GameState {
   stats: { kills: number; deaths: number; rescued: number; bestCombo: number; ticks: number; grenades: number; parries: number; dodges: number; chains: number };
 }
 function newPlayer(slot: number): Player {
-  return { id: slot + 1, z: 30 + slot * 25, slot, joined: false, ready: false, cursor: slot, char: slot, face: 1, x: 0, y: 0, w: 28, h: 56, vx: 0, vy: 0, ground: false, hp: 100, maxHp: 100, iframes: 0, down: false, downT: 0, out: false, revive: 0, weapon: 'pistola', ammo: 0, shootCd: 0, ax: 1, ay: 0, shooting: 0, meleeT: 0, meleeStep: 0, meleeWin: 0, swing: 0, dive: false, dashT: 0, dashCd: 0, jumpsLeft: 0, coyote: 0, jbuf: 0, crouch: false, dropT: 0, buf: 0, meter: 50, specialT: 0, vehicle: 0, prev: 0, flash: 0, kills: 0, connected: false, grenades: 3, grenadeCd: 0 };
+  return { id: slot + 1, z: 30 + slot * 25, slot, joined: false, ready: false, cursor: slot, char: slot, face: 1, x: 0, y: 0, w: 28, h: 56, vx: 0, vy: 0, ground: false, hp: 100, maxHp: 100, iframes: 0, down: false, downT: 0, out: false, revive: 0, weapon: 'pistola', ammo: 0, shootCd: 0, ax: 1, ay: 0, shooting: 0, meleeT: 0, meleeStep: 0, meleeWin: 0, meleeBuffer: 0, swing: 0, dive: false, dashT: 0, dashCd: 0, jumpsLeft: 0, coyote: 0, jbuf: 0, crouch: false, dropT: 0, buf: 0, meter: 50, specialT: 0, vehicle: 0, prev: 0, flash: 0, kills: 0, connected: false, grenades: 3, grenadeCd: 0, dashX: 0, dashZ: 0, counterT: 0 };
 }
 export function createGame(seed = 12345): GameState {
-  return { autoStart: true, startRequested: false, tick: 0, phase: 'select', phaseT: 0, levelIdx: 0, line: 0, players: [0, 1, 2, 3].map(newPlayer), enemies: [], bullets: [], props: [], pickups: [], camX: 0, camLock: 1e9, arenaIdx: 0, wave: 0, arenaOn: false, spawnIdx: 0, bossId: 0, clearT: 0, lastHit: 0, atBoss: false, bossKeep: 0, lives: 3, score: 0, combo: 0, comboT: 0, hitstop: 0, shake: 0, slow: 0, seed: seed >>> 0 || 1, nextId: 10, events: [], frenzy: 0, frenzyCharge: 0, checkpoint: 0, chain: 0, chainT: 0, stats: { kills: 0, deaths: 0, rescued: 0, bestCombo: 0, ticks: 0, grenades: 0, parries: 0, dodges: 0, chains: 0 } };
+  return { autoStart: true, startRequested: false, replay: false, mission: { records: 0, ticks: 0, falls: 0 }, tick: 0, phase: 'select', phaseT: 0, levelIdx: 0, line: 0, players: [0, 1, 2, 3].map(newPlayer), enemies: [], bullets: [], props: [], pickups: [], camX: 0, camLock: 1e9, arenaIdx: 0, wave: 0, arenaOn: false, spawnIdx: 0, bossId: 0, clearT: 0, lastHit: 0, atBoss: false, bossKeep: 0, lives: 3, score: 0, combo: 0, comboT: 0, hitstop: 0, shake: 0, slow: 0, seed: seed >>> 0 || 1, nextId: 10, events: [], frenzy: 0, frenzyCharge: 0, checkpoint: 0, chain: 0, chainT: 0, stats: { kills: 0, deaths: 0, rescued: 0, bestCombo: 0, ticks: 0, grenades: 0, parries: 0, dodges: 0, chains: 0 } };
+}
+export function countRecords(s: GameState) {
+  return MISSION_RECORDS[s.levelIdx].positions.filter((_, i) => s.mission.records & (1 << i)).length;
+}
+export function missionResult(s: GameState) {
+  const records = countRecords(s), { falls, ticks } = s.mission;
+  const rank = records === 3 && falls === 0 ? 'S' : records >= 2 || falls === 0 ? 'A' : 'B';
+  return { rank, records, falls, ticks } as const;
 }
 export function rnd(s: GameState) { let x = s.seed; x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; s.seed = x; return x / 4294967296; }
 const emit = (s: GameState, k: string, x: number, y: number, a?: number, str?: string) => { s.events.push({ k, x, y: k === 'text' ? y : y + shotZ - 80, a, s: str }); };
@@ -72,6 +96,7 @@ function spawnPlayerAt(s: GameState, p: Player, x: number) {
   let sx = x;
   for (let d = 0; d < W; d += 20) { if (surfaceAt(lv, x + d) !== null) { sx = x + d; break; } if (surfaceAt(lv, x - d) !== null) { sx = x - d; break; } }
   p.x = sx + 10; p.y = Math.max(40, (surfaceAt(lv, sx + 10) ?? 460) - 160); p.vx = 0; p.vy = 0; p.down = false; p.out = false; p.hp = p.maxHp; p.iframes = 120; p.revive = 0; p.vehicle = 0; p.h = 56; p.w = 28; p.specialT = 0; p.dashT = 0;
+  p.dashCd = 0; p.counterT = 0; p.meleeT = 0; p.meleeWin = 0; p.meleeBuffer = 0; p.dive = false; p.jbuf = 0; p.coyote = 0; p.jumpsLeft = 0; p.buf = 0;
 }
 function setupPlayerChar(p: Player) {
   const c = CHARS[p.char]; p.maxHp = c.hp; p.hp = c.hp; p.weapon = c.weapon; p.ammo = 0;
@@ -88,10 +113,15 @@ function jumpToCheckpoint(s: GameState, checkpoint: number) {
   if (s.spawnIdx < 0) s.spawnIdx = lv.spawns.length;
   active(s).forEach((p, i) => spawnPlayerAt(s, p, s.camX + 130 + i * 55));
 }
-export function loadLevel(s: GameState, idx: number) {
+export function loadLevel(s: GameState, idx: number, retry = false) {
   s.atBoss = false;
+  if (!retry) s.mission = { records: 0, ticks: 0, falls: 0 };
   s.frenzy = 0; s.frenzyCharge = 0; s.checkpoint = 0; s.chain = 0; s.chainT = 0;
   s.levelIdx = idx; s.enemies = []; s.bullets = []; s.props = []; s.pickups = []; s.camX = 0; s.camLock = 1e9; s.arenaIdx = 0; s.wave = 0; s.arenaOn = false; s.spawnIdx = 0; s.bossId = 0; s.clearT = 0; s.hitstop = 0; s.slow = 0; s.comboT = 0; s.combo = 0;
+  const lv = level(s);
+  MISSION_RECORDS[idx].positions.forEach(({ x, z }, record) => {
+    if (!(s.mission.records & (1 << record))) s.pickups.push({ id: s.nextId++, x, z, y: surfaceAt(lv, x) ?? 460, w: 36, h: 34, vx: 0, vy: 0, ground: true, drop: 'record', life: 1, record });
+  });
   active(s).forEach((p, i) => { spawnPlayerAt(s, p, 120 + i * 55); p.face = 1; p.iframes = 90; p.grenades = 3; p.grenadeCd = 0; });
 }
 function setPhase(s: GameState, ph: Phase) { if (ph === 'story' || ph === 'select') s.startRequested = false; s.phase = ph; s.phaseT = 0; s.line = 0; emit(s, 'phase', 0, 0, 0, ph); }
@@ -115,13 +145,13 @@ export function step(s: GameState, inputs: (number | null)[]) {
     }
     case 'play': stepPlay(s, inputs); break;
     case 'clear':
-      if (s.phaseT > 45 && confirmPressed(s, inputs)) {
+      if (!s.replay && s.phaseT > 45 && confirmPressed(s, inputs)) {
         if (s.levelIdx + 1 >= LEVELS.length) { setPhase(s, 'ending'); emit(s, 'victory', 0, 0); }
         else { s.levelIdx++; s.lives++; s.bossKeep = 0; setPhase(s, 'story'); }
       }
       break;
     case 'gameover':
-      if (s.phaseT > 45 && confirmPressed(s, inputs)) { s.lives = 3; s.score = Math.floor(s.score / 2); const boss = s.enemies.find(e => e.id === s.bossId); if (boss) s.bossKeep = boss.hp; const again = s.atBoss, checkpoint = s.checkpoint; loadLevel(s, s.levelIdx); if (again) jumpToBoss(s); else if (checkpoint) jumpToCheckpoint(s, checkpoint); setPhase(s, 'play'); emit(s, 'levelstart', 0, 0); }
+      if (s.phaseT > 45 && confirmPressed(s, inputs)) { s.lives = 3; s.score = Math.floor(s.score / 2); const boss = s.enemies.find(e => e.id === s.bossId); if (boss) s.bossKeep = boss.hp; const again = s.atBoss, checkpoint = s.checkpoint; loadLevel(s, s.levelIdx, true); if (again) jumpToBoss(s); else if (checkpoint) jumpToCheckpoint(s, checkpoint); s.pickups = s.pickups.filter(p => p.x >= s.camX); setPhase(s, 'play'); emit(s, 'levelstart', 0, 0); }
       break;
     case 'ending':
       if (s.phaseT > 12 && confirmPressed(s, inputs)) {
@@ -168,7 +198,7 @@ function stepSelect(s: GameState, inputs: (number | null)[]) {
     if (s.clearT++ > 50) {
       s.clearT = 0;
       for (const p of js) { p.char = p.cursor; setupPlayerChar(p); p.meter = 50; p.kills = 0; }
-      s.lives = 2 + js.length; s.score = 0; s.levelIdx = 0; setPhase(s, 'story');
+      s.lives = 2 + js.length; s.score = 0; setPhase(s, 'story');
     }
   } else { s.clearT = 0; if (!js.length || js.some(p => !p.ready)) s.startRequested = false; }
 }
@@ -176,6 +206,7 @@ function stepSelect(s: GameState, inputs: (number | null)[]) {
 // ---------- Juego ----------
 function stepPlay(s: GameState, inputs: (number | null)[]) {
   s.stats.ticks++;
+  if (!s.clearT) s.mission.ticks++;
   if (s.shake > 0) s.shake *= .86;
   // Lo que se aprieta durante una pausa de impacto se guarda: ningún toque se pierde.
   const hold = () => { for (const p of s.players) { const i = inputs[p.slot] ?? 0; p.buf |= i & ~p.prev; } };
@@ -233,23 +264,62 @@ function spawnEnemy(s: GameState, type: EnemyType, x: number, y: number, arena: 
   s.enemies.push(e); return e;
 }
 function runArena(s: GameState, lv: Level) {
-  const a: Arena | undefined = lv.arenas[s.arenaIdx];
-  if (!a) return;
-  if (!s.arenaOn) { if (s.camX >= a.x - (lv.autoScroll ? 0 : 200)) { s.camLock = a.x; } if (s.camX >= a.x - 2) { s.arenaOn = true; s.wave = 0; s.camX = a.x; spawnWave(s, a); if (a.boss) { s.atBoss = true; emit(s, 'bosswarn', 0, 0); } else emit(s, 'text', W / 2, 200, 0, a.label ?? '¡No pasa nadie!'); } return; }
+  const arena = lv.arenas[s.arenaIdx];
+  if (!arena) return;
+  if (!s.arenaOn) {
+    if (s.camX >= arena.x - (lv.autoScroll ? 2 : 200)) s.camLock = arena.x;
+    if (s.camX < arena.x - 2) return;
+    s.arenaOn = true;
+    s.wave = 0;
+    s.camX = arena.x;
+    if (arena.boss) {
+      s.atBoss = true;
+      emit(s, 'bosswarn', 0, 0);
+    } else {
+      spawnWave(s, arena);
+      emit(s, 'text', W / 2, 200, 0, arena.label);
+    }
+    return;
+  }
   if (s.clearT > 0 || s.enemies.some(e => e.arena && e.hp > 0)) return;
   s.wave++;
-  if (s.wave < a.waves.length) spawnWave(s, a);
-  else if (a.boss && !s.bossId) {
-    const d = ENEMIES[a.boss]; const b = spawnEnemy(s, a.boss, s.camX + W - 150, d.fly ? 260 : 460, true); s.bossId = b.id; if (s.bossKeep > 0) b.hp = Math.min(b.hp, s.bossKeep); if (a.boss === 'colmena') b.y = (surfaceAt(lv, b.x) ?? 460); emit(s, 'boss', b.x, b.y, 0, d.name);
-    s.hitstop = 0; s.shake = 12;
-  } else if (!a.boss) { s.arenaOn = false; s.arenaIdx++; s.camLock = 1e9; s.checkpoint = s.arenaIdx; for (const p of living(s)) { p.hp = Math.min(p.maxHp, p.hp + p.maxHp * .2); p.grenades = Math.min(3, p.grenades + 1); } emit(s, 'checkpoint', W / 2, 180, 0, '¡Pausa del mate! Punto de control'); emit(s, 'text', W / 2, 180, 0, '¡Pausa del mate! Salud + granada'); }
+  if (s.wave < arena.waves.length) {
+    spawnWave(s, arena);
+    const label = arena.waveLabels?.[s.wave];
+    if (label) emit(s, 'text', W / 2, 200, 0, `${s.wave + 1}/${arena.waves.length} · ${label}`);
+  } else if (arena.boss && !s.bossId) {
+    const def = ENEMIES[arena.boss];
+    const x = s.camX + W - 150;
+    const boss = spawnEnemy(s, arena.boss, x, def.fly && arena.boss !== 'colmena' ? 260 : surfaceAt(lv, x) ?? 460, true);
+    s.bossId = boss.id;
+    boss.t = 0;
+    if (s.bossKeep > 0) boss.hp = Math.min(boss.hp, s.bossKeep);
+    boss.announced = bossPhase(boss);
+    shotZ = boss.z;
+    emit(s, 'boss', boss.x, boss.y, 0, def.name);
+    s.hitstop = 0;
+    s.shake = 12;
+  } else if (!arena.boss) {
+    s.arenaOn = false;
+    s.arenaIdx++;
+    s.camLock = 1e9;
+    s.checkpoint = s.arenaIdx;
+    for (const p of living(s)) {
+      p.hp = Math.min(p.maxHp, p.hp + p.maxHp * .2);
+      p.grenades = Math.min(3, p.grenades + 1);
+    }
+    emit(s, 'checkpoint', W / 2, 180, 0, '¡Pausa del mate! Punto de control');
+    emit(s, 'text', W / 2, 180, 0, '¡Pausa del mate! Salud + granada');
+  }
 }
-function spawnWave(s: GameState, a: Arena) {
-  a.waves[s.wave]?.forEach((w, i) => {
-    const x = w.side > 0 ? s.camX + W + 30 + i * 36 : s.camX - 30 - i * 36;
-    spawnEnemy(s, w.type, x, w.y ?? 300, true);
+
+function spawnWave(s: GameState, arena: Arena) {
+  arena.waves[s.wave]?.forEach((enemy, index) => {
+    const flying = ENEMIES[enemy.type].fly;
+    const offset = flying ? -(70 + index * 24) : 24 + index * 32;
+    const x = s.camX + (enemy.side > 0 ? W + offset : -offset);
+    spawnEnemy(s, enemy.type, x, enemy.y ?? 460, true).z = enemy.z;
   });
-  if (a.waves.length === 0 && !a.boss) s.wave = 0;
 }
 
 function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
@@ -257,6 +327,7 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   const buf = p.buf; p.buf = 0;
   const has = (b: number) => !!(inp & b); const press = (b: number) => (!!(inp & b) && !(p.prev & b)) || !!(buf & b);
   if (p.grenadeCd > 0) p.grenadeCd--;
+  if (p.counterT > 0) p.counterT--;
   if (p.flash > 0) p.flash--; if (p.iframes > 0) p.iframes--; if (p.shootCd > 0) p.shootCd--; if (p.dashCd > 0) p.dashCd--; if (p.meleeWin > 0) p.meleeWin--; if (p.dropT > 0) p.dropT--; if (p.shooting > 0) p.shooting--;
   if (p.out) return;
   if (p.down) {
@@ -271,13 +342,12 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
     }
     return;
   }
-  // Puntería en 8 direcciones
   const dirx = (has(BTN.R) ? 1 : 0) - (has(BTN.L) ? 1 : 0);
-  if (dirx) p.face = dirx;
+  if (dirx && !p.dashT) p.face = dirx;
   p.crouch = false;
   // Arriba y abajo mueven por la profundidad del escenario.
   const dirz = (has(BTN.D) ? 1 : 0) - (has(BTN.U) ? 1 : 0);
-  if (p.specialT === 0 && !(p.meleeT > 0 && p.ground)) p.z = Math.max(0, Math.min(DEPTH, p.z + dirz * (p.vehicle ? 3 : c.speed * .68)));
+  if (p.specialT === 0 && !p.dashT && !(p.meleeT > 0 && p.ground)) p.z = Math.max(0, Math.min(DEPTH, p.z + dirz * (p.vehicle ? 3 : c.speed * .68)));
   p.ax = p.face; p.ay = 0;
   p.h = p.vehicle ? 66 : p.crouch ? 38 : 56; p.w = p.vehicle ? 70 : 28;
 
@@ -290,21 +360,22 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   }
   // Movimiento con aceleración: reacciona enseguida y derrapa un poco al frenar.
   const sp = p.vehicle ? 4.2 : c.speed; const accel = p.ground ? .9 : .55; const friction = p.ground ? .72 : .92;
-  if (p.dashT > 0) {
-    p.dashT--; p.vx = p.face * 11; p.vy = Math.min(p.vy, 1); p.iframes = Math.max(p.iframes, 1);
-    for (const e of s.enemies) if (overlap(p, e) && e.swings[p.slot] !== p.swing) { e.swings[p.slot] = p.swing; if (!isBoss(e.type)) e.stun = Math.max(e.stun, 24); damageEnemy(s, e, c.meleeDmg * .7, p.face * 6, -3, p, true); }
+  if (press(BTN.DASH) && p.dashCd === 0 && !p.vehicle) beginDash(s, p, dirx, dirz);
+  const dashing = p.dashT > 0;
+  if (dashing) {
+    p.vx = p.dashX; p.z = Math.max(0, Math.min(DEPTH, p.z + p.dashZ)); p.vy = Math.min(p.vy, 1);
+    for (const e of s.enemies) if (e.hp > 0 && overlap(p, e) && e.swings[p.slot] !== p.swing) {
+      e.swings[p.slot] = p.swing;
+      if (!isBoss(e.type)) e.stun = Math.max(e.stun, 24);
+      damageEnemy(s, e, c.meleeDmg * .7, Math.sign(p.dashX) * 6, -3, p, true, false);
+    }
+    shotZ = p.z;
     if (s.tick % 3 === 0) emit(s, 'dust', p.x, p.y);
+    p.dashT--;
   }
   else if (p.crouch) p.vx *= friction;
   else if (dirx && !(p.meleeT > 0 && p.ground)) { p.vx += dirx * accel; if (Math.abs(p.vx) > sp) p.vx = Math.sign(p.vx) * sp; }
   else p.vx *= friction;
-  if (press(BTN.DASH) && p.dashCd === 0 && !p.vehicle) {
-    p.dashT = 10; p.dashCd = c.id === 'yoli' ? 20 : 42; p.meleeT = 0; p.iframes = Math.max(p.iframes, 11); p.swing++;
-    const threat = s.bullets.some(b => b.side === 1 && Math.abs(b.z - p.z) < 25 && Math.abs(b.x - p.x) < 100 && b.y > p.y - p.h - 10 && b.y < p.y + 10 && (b.x - p.x) * b.vx < 0);
-    if (threat) { p.meter = Math.min(100, p.meter + 25); gainFrenzy(s, 18); s.stats.dodges++; emit(s, 'dodge', p.x, p.y - 40); }
-    emit(s, 'dash', p.x, p.y);
-  }
-
   // Salto con margen: "coyote time", buffer y altura variable.
   if (p.ground) { p.coyote = 7; p.jumpsLeft = c.jumps - 1; } else if (p.coyote > 0) p.coyote--;
   if (press(BTN.J)) p.jbuf = 7; else if (p.jbuf > 0) p.jbuf--;
@@ -316,26 +387,31 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   }
   if (!has(BTN.J) && p.vy < -4) p.vy += GRAV * 1.1;
   const g = p.vy > 0 ? GRAV * 1.15 : GRAV;
-  if (p.dashT === 0) p.vy = Math.min(p.vy + g, MAXFALL);
+  if (!dashing) p.vy = Math.min(p.vy + g, MAXFALL);
   const wasGround = p.ground, vyBefore = p.vy;
   moveBody(p, lv, p.dropT > 0 || has(BTN.D) && p.dive);
   if (p.ground && !wasGround && vyBefore > 6) { emit(s, 'land', p.x, p.y, vyBefore); }
   if (p.dive && p.ground) { p.dive = false; p.meleeT = 0; explode(s, p.x, p.y - 10, 70, c.meleeDmg, 0, p.slot, true); s.shake = Math.max(s.shake, 5); }
 
   // Disparo
-  if (has(BTN.S) && p.shootCd === 0 && p.meleeT === 0) fire(s, p);
+  shotZ = p.z;
+  if (has(BTN.S) && p.shootCd === 0 && p.meleeT === 0 && !dashing) fire(s, p);
   if (press(BTN.G) && p.grenades > 0 && p.grenadeCd === 0 && !p.vehicle) {
     p.grenades--; p.grenadeCd = 40; s.stats.grenades++;
     s.bullets.push({ id: s.nextId++, z: p.z, x: p.x + p.face * 22, y: p.y - 36, vx: p.face * 7.5, vy: -8.5, dmg: 75, life: 52, kind: 'granada', side: 0, owner: p.slot, pierce: false, grav: .34, r: 8, hits: [] });
     emit(s, 'grenade', p.x, p.y - 36);
   }
   // Cuerpo a cuerpo: combo de tres golpes y picada en el aire.
+  if (press(BTN.M)) p.meleeBuffer = 8;
+  else if (p.meleeBuffer > 0) p.meleeBuffer--;
   if (p.meleeT > 0) {
     p.meleeT--;
     const active_ = p.dive || (p.meleeT <= 11 && p.meleeT >= 5);
     if (active_) meleeHit(s, p, c.meleeDmg * (p.meleeStep === 2 ? 1.6 : 1), c.meleeRange);
   }
-  if (press(BTN.M) && p.meleeT <= 3 && !p.vehicle) {
+  shotZ = p.z;
+  if (p.meleeBuffer > 0 && !dashing && p.meleeT <= 3 && !p.vehicle) {
+    p.meleeBuffer = 0;
     if (!p.ground) { p.dive = true; p.vy = 12; p.vx *= .3; p.meleeT = 99; p.meleeStep = 1; p.swing++; emit(s, 'melee', p.x, p.y, 2); }
     else { p.meleeStep = p.meleeWin > 0 ? (p.meleeStep + 1) % 3 : 0; p.meleeT = p.meleeStep === 2 ? 18 : 14; p.meleeWin = 30; p.swing++; if (p.ground) p.vx = p.face * (p.meleeStep === 2 ? 7 : 4); emit(s, 'melee', p.x, p.y, p.meleeStep); }
   }
@@ -344,6 +420,27 @@ function stepPlayer(s: GameState, p: Player, inp: number, lv: Level) {
   // Subirse a un vehículo
   if (press(BTN.M) && !p.vehicle) { const v = s.props.find(o => o.kind === 'vehicle' && overlap(o, p)); if (v) { p.vehicle = v.hp; v.hp = 0; emit(s, 'vehicle', p.x, p.y); emit(s, 'text', p.x - s.camX, p.y - 90, 0, '¡A la zorra blindada!'); } }
   clampPlayer(s, p, lv);
+}
+function beginDash(s: GameState, p: Player, x: number, z: number) {
+  const dx = x || (z ? 0 : p.face), length = Math.hypot(dx, z);
+  const perfect = p.iframes === 0 && s.bullets.some(b => {
+    if (b.side !== 1 || b.life <= 0 || Math.abs(b.z - p.z) >= 22) return false;
+    const speed2 = b.vx ** 2 + b.vy ** 2;
+    if (speed2 < .01) return false;
+    const y = p.y - p.h / 2;
+    const time = ((p.x - b.x) * b.vx + (y - b.y) * b.vy) / speed2;
+    if (time < 0 || time > 8) return false;
+    return Math.abs(p.x - (b.x + b.vx * time)) < p.w / 2 + b.r
+      && Math.abs(y - (b.y + b.vy * time)) < p.h / 2 + b.r;
+  });
+  p.dashX = 11 * dx / length; p.dashZ = 8 * z / length;
+  p.dashT = 10; p.dashCd = p.char === 0 ? 22 : 36; p.meleeT = 0; p.dive = false;
+  p.iframes = Math.max(p.iframes, 11); p.swing++;
+  if (perfect) {
+    p.counterT = 135; p.meter = Math.min(100, p.meter + 25);
+    gainFrenzy(s, 18); s.stats.dodges++; emit(s, 'dodge', p.x, p.y - 40);
+  }
+  emit(s, 'dash', p.x, p.y);
 }
 function clampPlayer(s: GameState, p: Player, lv: Level) {
   const minX = s.camX + p.w / 2 + 4, maxX = s.camX + W - p.w / 2 - 4;
@@ -358,7 +455,17 @@ function clampPlayer(s: GameState, p: Player, lv: Level) {
 function fire(s: GameState, p: Player) {
   const id: WeaponId = p.vehicle ? 'canon' : p.weapon; const w = WEAPONS[id];
   p.shootCd = Math.max(2, Math.round(w.cd * (s.frenzy > 0 ? .75 : 1))); p.shooting = 10;
-  const a0 = Math.atan2(p.ay, p.ax); const mx = p.x + p.ax * (p.vehicle ? 44 : 26), my = p.y - p.h * .62 + p.ay * 22;
+  const mx = p.x + p.face * (p.vehicle ? 44 : 26), my = p.y - p.h * .62;
+  let target: Enemy | undefined, closest = 460;
+  for (const e of s.enemies) {
+    const ahead = (e.x - mx) * p.face;
+    if (e.hp > 0 && ahead > 4 && ahead < closest && Math.abs(e.z - p.z) < 22 + e.w / 5) {
+      target = e; closest = ahead;
+    }
+  }
+  const targetY = target ? Math.max(target.y - target.h + 10, Math.min(target.y - 10, my)) : my;
+  const a0 = Math.atan2(targetY - my, p.face * closest);
+  p.ax = Math.cos(a0); p.ay = Math.sin(a0);
   for (let i = 0; i < w.count; i++) {
     const a = a0 + (w.count > 1 ? (i - (w.count - 1) / 2) * w.spread : (rnd(s) - .5) * w.spread * 2);
     const v = w.speed * (w.count > 1 ? .9 + rnd(s) * .2 : 1);
@@ -366,7 +473,7 @@ function fire(s: GameState, p: Player) {
   }
   if (w.recoil && p.ground) p.vx -= p.ax * w.recoil;
   s.shake = Math.max(s.shake, w.shake);
-  emit(s, 'shot', mx, my, Math.atan2(p.ay, p.ax), w.kind);
+  emit(s, 'shot', mx, my, a0, w.kind);
   if (w.ammo && !p.vehicle) { p.ammo--; if (p.ammo <= 0) { p.weapon = CHARS[p.char].weapon; p.ammo = 0; emit(s, 'empty', p.x, p.y); } }
 }
 function meleeHit(s: GameState, p: Player, dmg: number, range: number) {
@@ -408,7 +515,7 @@ export function hurtPlayer(s: GameState, p: Player, dmg: number, force = false) 
   p.hp -= dmg; p.iframes = 60; p.flash = 12; s.shake = Math.max(s.shake, 8); s.hitstop = Math.max(s.hitstop, 3); s.combo = 0; s.comboT = 0;
   emit(s, 'hurt', p.x, p.y - 30);
   if (p.hp <= 0) {
-    p.hp = 0; p.down = true; p.dive = false; p.meleeT = 0; p.weapon = CHARS[p.char].weapon; p.ammo = 0; s.stats.deaths++; p.revive = 0;
+    p.hp = 0; p.down = true; p.dive = false; p.meleeT = 0; p.counterT = 0; p.weapon = CHARS[p.char].weapon; p.ammo = 0; s.stats.deaths++; s.mission.falls++; p.revive = 0;
     p.downT = living(s).length > 0 ? 420 : 70; emit(s, 'down', p.x, p.y - 30);
     p.vy = -7;
   }
@@ -418,12 +525,25 @@ function ejectVehicle(s: GameState, p: Player, destroyed: boolean) {
   else s.props.push({ id: s.nextId++, z: p.z, x: p.x, y: p.y, w: 80, h: 60, vx: 0, vy: 0, ground: true, kind: 'vehicle', hp: p.vehicle, freed: 0 });
   p.vehicle = 0; p.vy = -10; p.h = 56; p.w = 28;
 }
-export function damageEnemy(s: GameState, e: Enemy, dmg: number, kx: number, ky: number, p: Player | null, melee = false) {
+export function damageEnemy(s: GameState, e: Enemy, dmg: number, kx: number, ky: number, p: Player | null, melee = false, canCounter = true) {
   if (e.hp <= 0) return;
   shotZ = e.z; s.lastHit = e.id;
   const boss = isBoss(e.type);
   if (e.stun > 0) dmg *= p && CHARS[p.char].id === 'beto' ? 2 : 1.4;
   if (p && s.frenzy > 0) dmg *= 1.35;
+  if (p && canCounter && p.counterT > 0) {
+    p.counterT = 0; dmg *= 1.6;
+    s.hitstop = Math.max(s.hitstop, 3);
+    emit(s, 'counter', e.x, e.y - e.h / 2, p.slot, '¡Contragolpe!');
+  }
+  if (p && melee && canCounter && e.support && e.support.slot !== p.slot && s.tick <= e.support.until && s.tick >= e.support.readyAt) {
+    dmg *= 1.25;
+    if (!boss) e.stun = Math.max(e.stun, 24);
+    e.support.readyAt = s.tick + 140;
+    gainFrenzy(s, 12);
+    emit(s, 'teamhit', e.x, e.y - e.h / 2, p.slot, '¡Golpe de equipo!');
+  }
+  if (p) e.support = { slot: p.slot, until: s.tick + 50, readyAt: e.support?.readyAt ?? 0 };
   dmg = Math.round(dmg); e.hp -= dmg; e.flash = 6;
   if (!boss && e.type !== 'turret') { e.vx += kx; if (ky) { e.vy = ky; } }
   if (p) p.meter = Math.min(100, p.meter + dmg * (boss ? .06 : .18));
@@ -481,23 +601,34 @@ function stepProps(s: GameState, lv: Level) {
 }
 function stepPickups(s: GameState, lv: Level) {
   for (const k of s.pickups) {
+    if (k.drop === 'record') {
+      const mask = 1 << k.record;
+      if (!(s.mission.records & mask) && living(s).some(p => overlap(p, k))) {
+        shotZ = k.z;
+        s.mission.records |= mask; k.life = 0; s.score += 750;
+        gainFrenzy(s, 12);
+        emit(s, 'record', k.x, k.y - 33, countRecords(s), MISSION_RECORDS[s.levelIdx].name);
+      }
+      continue;
+    }
     k.life--; k.vy = Math.min(k.vy + GRAV, 8); moveBody(k, lv); if (k.y > H + 60) k.life = 0;
     const p = living(s).find(p => overlap(p, k));
     if (p && k.life > 0) {
-      k.life = 0; emit(s, 'pickup', k.x, k.y - 20, 0, k.drop); p.meter = Math.min(100, p.meter + 10); s.score += 100;
+      shotZ = k.z; k.life = 0; emit(s, 'pickup', k.x, k.y - 20, 0, k.drop); p.meter = Math.min(100, p.meter + 10); s.score += 100;
       if (k.drop === 'food') { p.hp = Math.min(p.maxHp, p.hp + p.maxHp * .35); emit(s, 'text', p.x - s.camX, p.y - 80, 0, '¡Tortafrita!'); }
       else { p.weapon = k.drop; p.ammo = WEAPONS[k.drop].ammo; emit(s, 'text', p.x - s.camX, p.y - 80, 0, WEAPONS[k.drop].name + '!'); }
     }
   }
   s.pickups = s.pickups.filter(k => k.life > 0 && k.x > s.camX - 100);
 }
-/** Peligros con un aviso de 55 cuadros. Saltar, cambiar de carril o esquivar permite cruzarlos. */
+/** Saltar, cambiar de carril o esquivar permite cruzar los peligros anunciados. */
 function stepHazards(s: GameState, lv: Level) {
   for (const h of lv.hazards) {
     if (h.x > s.camX + W + 30 || h.x + h.w < s.camX) continue;
     const phase = (s.tick + h.offset) % h.period;
     if (phase >= h.on) continue;
-    for (const p of living(s)) if (p.x + p.w / 2 > h.x && p.x - p.w / 2 < h.x + h.w && Math.abs(p.z - h.z) < 27 && p.y > 425) {
+    const zone = hazardZone(h, s.tick);
+    for (const p of living(s)) if (p.x + p.w / 2 > h.x && p.x - p.w / 2 < h.x + h.w && Math.abs(p.z - zone.z) < zone.depth / 2 && p.y > 460 - h.height) {
       shotZ = p.z; hurtPlayer(s, p, h.dmg);
     }
   }
@@ -525,7 +656,7 @@ function stepBullets(s: GameState, lv: Level) {
     if (b.side === 0) {
       for (const e of s.enemies) {
         if (e.hp <= 0 || b.hits.includes(e.id)) continue;
-        if (Math.abs(e.x - b.x) < e.w / 2 + b.r && Math.abs(e.z - b.z) < 26 + e.w / 5) {
+        if (Math.abs(e.x - b.x) < e.w / 2 + b.r && Math.abs(e.z - b.z) < 26 + e.w / 5 && b.y + b.r > e.y - e.h && b.y - b.r < e.y) {
           b.hits.push(e.id);
           if (e.type === 'shield' && e.stun === 0 && Math.sign(b.vx) === -e.face && b.kind !== 'cohete' && b.kind !== 'wave') { emit(s, 'clang', b.x, b.y); b.life = 0; break; }
           if (b.kind === 'cohete') { b.life = 0; explode(s, b.x, b.y, 100, b.dmg, 0, b.owner, false); break; }
@@ -533,7 +664,7 @@ function stepBullets(s: GameState, lv: Level) {
           if (!b.pierce) { b.life = 0; break; }
         }
       }
-      if (b.life > 0) for (const o of s.props) if (o.hp > 0 && o.kind !== 'vehicle' && !o.freed && Math.abs(o.x - b.x) < o.w / 2 + b.r && Math.abs(o.z - b.z) < 34) { damageProp(s, o, b.dmg, b.owner); if (!b.pierce) b.life = 0; break; }
+      if (b.life > 0) for (const o of s.props) if (o.hp > 0 && o.kind !== 'vehicle' && !o.freed && Math.abs(o.x - b.x) < o.w / 2 + b.r && Math.abs(o.z - b.z) < 34 && b.y + b.r > o.y - o.h && b.y - b.r < o.y) { damageProp(s, o, b.dmg, b.owner); if (!b.pierce) b.life = 0; break; }
     } else {
       for (const p of living(s)) if (Math.abs(p.z - b.z) < 22 && Math.abs(p.x - b.x) < p.w / 2 + b.r - 2 && b.y > p.y - p.h - b.r + 4 && b.y < p.y + b.r) {
         if (p.iframes > 0) continue;
@@ -558,7 +689,7 @@ function stepEnemy(s: GameState, e: Enemy, lv: Level) {
   const offscreen = e.x > s.camX + W - 12 || e.x < s.camX + 12;
   if (tgt) {
     const dx = tgt.x - e.x, dist = Math.abs(dx); const aim = Math.atan2(tgt.y - 30 - (e.y - e.h * .6), dx);
-    if (!(e.type === 'camion' && e.st === 1) && (e.type !== 'exploder' || e.st === 0)) e.face = dx >= 0 ? 1 : -1;
+    if (!boss && (e.type !== 'exploder' || e.st === 0)) e.face = dx >= 0 ? 1 : -1;
     if (e.cd > 0) e.cd--;
     if (!boss && e.type !== 'turret') { e.z += Math.max(-1.3, Math.min(1.3, tgt.z - e.z)); shotZ = e.z; }
     if (boss) shotZ = tgt.z; // Los jefes apuntan al carril de su objetivo.
@@ -574,9 +705,9 @@ function stepEnemy(s: GameState, e: Enemy, lv: Level) {
       case 'turret': if (e.cd === 0 && dist < 560 && !offscreen) { e.cd = 80; eshot(s, e.x, e.y - 20, aim, 4.4); emit(s, 'eshot', e.x, e.y - 20); } break;
       case 'exploder': walk(4.1); if (dist < 46 && Math.abs(tgt.y - e.y) < 70) { if (++e.st > 18) { e.hp = 1; damageEnemy(s, e, 99, 0, 0, null); } } else if (e.st > 0) e.st++; if (e.st > 40) damageEnemy(s, e, 99, 0, 0, null); break;
       case 'heavy': if (dist > 200) walk(1); else e.vx *= .8; if (e.cd === 0 && !offscreen) { e.n++; e.cd = 110; if (e.n % 2) { for (const o of [-.15, 0, .15]) eshot(s, e.x + e.face * 30, e.y - 54, aim + o, 4.2, 12); } else { eshot(s, e.x + e.face * 30, e.y - 8, e.face > 0 ? 0 : Math.PI, 5.5, 14, 'wave'); } emit(s, 'eshot', e.x, e.y - 40); } break;
-      default: stepBoss(s, e, tgt, aim, lv);
+      default: stepBoss(s, e, tgt, lv);
     }
-    if (d.contact && !offscreen && e.st >= 0) for (const p of living(s)) if (overlap(e, p)) { hurtPlayer(s, p, d.contact); if (p.iframes === 60 && !boss) p.vx += e.face * 5; }
+    if (!boss && d.contact && !offscreen && e.st >= 0) for (const p of living(s)) if (overlap(e, p)) { hurtPlayer(s, p, d.contact); if (p.iframes === 60) p.vx += e.face * 5; }
   }
   if (d.fly) { if (e.type === 'turret') { e.vx = 0; e.vy = 0; } else if (!boss) { e.x += e.vx; e.y += e.vy; } }
   else { e.vy = Math.min(e.vy + GRAV, MAXFALL); moveBody(e, lv); if (e.y > H + 100) { e.hp = 0; emit(s, 'die', e.x, H, 0, e.type); } }
