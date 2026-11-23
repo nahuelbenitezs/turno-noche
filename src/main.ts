@@ -1,12 +1,13 @@
 import './style.css';
 import { Audio2 } from './audio';
-import { Inputs, setupTouch } from './input';
+import { Inputs, gamepadBits, setupTouch } from './input';
 import { HostSession, Link, decodeSnapshot, encodeSnapshot, hostRoom, joinRoom, normalizeCode } from './net/net';
 import { Renderer } from './render/renderer';
 import { botInput } from './sim/bot';
 import { BTN, CHARS, ENEMIES, H, W, WEAPONS, pickBits } from './sim/data';
 import { LEVELS } from './sim/levels';
-import { Ev, GameState, createGame, step } from './sim/sim';
+import { MISSION_RECORDS } from './sim/records';
+import { Ev, GameState, bossPhase, bossVulnerable, countRecords, createGame, missionResult, step } from './sim/sim';
 import { MenuView, screenHtml } from './ui';
 
 const $ = <T extends HTMLElement>(q: string) => document.querySelector<T>(q)!;
@@ -17,13 +18,27 @@ let mode: Mode = 'menu', s = createGame((Math.random() * 1e9) | 0), paused = fal
 const r = new Renderer(), audio = new Audio2(), inp = new Inputs();
 let session: HostSession | null = null, roomCode = '', closeNet: (() => void) | null = null, guestLink: Link | null = null, guestSlot = -1, lastSnapT = 0, netDown = false;
 let netAttempt = 0, connecting = false, best = 0, uiKey = '', pending: Ev[] = [], clickBits = 0, clickTo = '';
+const medals = LEVELS.map(() => 0);
 const botOn = q.has('bot'), portraits: string[] = [];
 const touchDevice = q.has('touch') || matchMedia('(pointer:coarse)').matches;
 const preference = (key: string, fallback: boolean) => { try { const value = localStorage.getItem(key); return value === null ? fallback : value === '1'; } catch { return fallback; } };
 r.reducedMotion = preference('tn-motion', matchMedia('(prefers-reduced-motion:reduce)').matches);
 r.lowFx = preference('tn-lowfx', touchDevice);
 try { best = Number(localStorage.getItem('tn-best')) || 0; } catch { /* almacenamiento opcional */ }
-function saveBest() { if (!botOn && s.score > best) { best = s.score; try { localStorage.setItem('tn-best', String(best)); } catch { /* almacenamiento opcional */ } } }
+try {
+  const saved: unknown = JSON.parse(localStorage.getItem('tn-medals') ?? 'null');
+  if (Array.isArray(saved)) saved.slice(0, medals.length).forEach((rank, i) => {
+    if (rank === 1 || rank === 2 || rank === 3) medals[i] = rank;
+  });
+} catch { /* almacenamiento opcional */ }
+function saveBest() { if (!botOn && !s.replay && s.score > best) { best = s.score; try { localStorage.setItem('tn-best', String(best)); } catch { /* almacenamiento opcional */ } } }
+function saveMedal() {
+  if (botOn || s.phase !== 'clear') return;
+  const rank = ['B', 'A', 'S'].indexOf(missionResult(s).rank) + 1;
+  if (rank <= medals[s.levelIdx]) return;
+  medals[s.levelIdx] = rank;
+  try { localStorage.setItem('tn-medals', JSON.stringify(medals)); } catch { /* almacenamiento opcional */ }
+}
 function fit() {
   const insets = getComputedStyle(document.documentElement), left = parseFloat(insets.getPropertyValue('--safe-left')) || 0, right = parseFloat(insets.getPropertyValue('--safe-right')) || 0, top = parseFloat(insets.getPropertyValue('--safe-top')) || 0, bottom = parseFloat(insets.getPropertyValue('--safe-bottom')) || 0;
   const vw = innerWidth - left - right, vh = (window.visualViewport?.height ?? innerHeight) - top - bottom, k = Math.min(vw / W, vh / H);
@@ -33,10 +48,10 @@ addEventListener('resize', fit); window.visualViewport?.addEventListener('resize
 let toastTimer = 0;
 function toast(message: string) { const el = $('#toast'); el.textContent = message; el.classList.add('visible'); clearTimeout(toastTimer); toastTimer = window.setTimeout(() => el.classList.remove('visible'), 2600); }
 function handle(e: Ev) {
-  r.fx(e, s); audio.play(e);
   if (e.k === 'boss') audio.boss = true;
   if (e.k === 'levelstart') { audio.boss = false; audio.level = s.levelIdx; audio.playing = true; }
-  if (e.k === 'phase' && ['ending', 'select', 'gameover', 'clear'].includes(e.s ?? '')) { audio.playing = false; saveBest(); }
+  r.fx(e, s); audio.play(e, s.camX + W / 2);
+  if (e.k === 'phase' && ['ending', 'select', 'gameover', 'clear'].includes(e.s ?? '')) { audio.playing = false; saveBest(); saveMedal(); }
   if (e.k === 'pickblocked' && (mode !== 'guest' || e.a === guestSlot)) toast('Ese personaje ya fichó. Elegí uno disponible.');
 }
 function drain() { for (const e of s.events) handle(e); if (mode === 'host') pending.push(...s.events); s.events = []; }
@@ -65,7 +80,8 @@ function advance(now: number) {
 }
 const backgroundTimer = window.setInterval(() => { if (performance.now() - lastRaf > 120) advance(performance.now()); }, 50);
 function frame(now: number) {
-  lastRaf = now; advance(now);
+  lastRaf = now; handleGamepads(); advance(now);
+  audio.paused = paused;
   if (mode !== 'menu') { r.draw(s); updateHud(); }
   renderUi(); updateNetwork(); requestAnimationFrame(frame);
 }
@@ -74,13 +90,16 @@ const FOE: Record<string, string> = { grunt: 'Cadete', rusher: 'Mordedor', flyer
 let hudBuilt = false;
 function buildHud() {
   hudBuilt = true;
-  hud.innerHTML = `<div class="team-hud">${[0, 1, 2, 3].map(i => `<div class="ph" id="ph${i}" style="--p:${P_COL[i]}" hidden><img class="hud-face" alt=""><div class="ph-data"><div class="n"><span class="nm"></span><span class="st"></span></div><div class="bar"><i class="hp"></i></div><div class="bar mt"><i class="meter"></i></div><div class="w"></div></div></div>`).join('')}</div><div class="mission-hud"><span id="mission-name"></span><span id="mission-objective"></span><div class="progress"><i id="mission-progress"></i></div></div><div id="center"><small>PUNTAJE</small><b id="score"></b><span id="lives"></span></div><div id="frenzy"><span id="frenzy-label">FRENESÍ DEL EQUIPO</span><div class="bar"><i id="frenzy-fill"></i></div></div><div id="hits"><b id="combo"></b><span id="multiplier"></span><div class="combo-life"><i id="combo-life"></i></div></div><div id="foe" hidden><span id="fn"></span><div class="bar"><i id="fh"></i></div></div><div id="bossbar" hidden><div><span>GERENCIA HOSTIL</span><b id="bn"></b><span id="boss-phase"></span></div><div class="bar"><i id="bh"></i></div></div>`;
+  hud.innerHTML = `<div class="team-hud">${[0, 1, 2, 3].map(i => `<div class="ph" id="ph${i}" style="--p:${P_COL[i]}" hidden><img class="hud-face" alt=""><div class="ph-data"><div class="n"><span class="nm"></span><span class="st"></span></div><div class="bar"><i class="hp"></i></div><div class="bar mt"><i class="meter"></i></div><div class="w"></div></div></div>`).join('')}</div><div class="mission-hud"><span id="mission-name"></span><span id="mission-objective"></span><div class="progress"><i id="mission-progress"></i></div><span id="mission-records"></span></div><div id="center"><small>PUNTAJE</small><b id="score"></b><span id="lives"></span></div><div id="frenzy"><span id="frenzy-label">FRENESÍ DEL EQUIPO</span><div class="bar"><i id="frenzy-fill"></i></div></div><div id="hits"><b id="combo"></b><span id="multiplier"></span><div class="combo-life"><i id="combo-life"></i></div></div><div id="foe" hidden><span id="fn"></span><div class="bar"><i id="fh"></i></div></div><div id="bossbar" hidden><div><span id="boss-attack"></span><b id="bn"></b><span id="boss-phase"></span></div><div class="bar"><i id="bh"></i></div></div>`;
 }
+let hudState: GameState | undefined, hudTick = -1;
 function updateHud() {
   const inPlay = ['play', 'clear', 'gameover'].includes(s.phase);
   hud.hidden = !inPlay; touch.hidden = !(inPlay && touchDevice && s.phase === 'play') || paused || netDown;
   stage.classList.toggle('touch-play', touchDevice && inPlay);
-  if (!inPlay) return; if (!hudBuilt) buildHud();
+  if (!inPlay || (hudState === s && hudTick === s.tick)) return;
+  hudState = s; hudTick = s.tick;
+  if (!hudBuilt) buildHud();
   for (const p of s.players) {
     const el = $(`#ph${p.slot}`); el.hidden = !p.joined; if (!p.joined) continue;
     const c = CHARS[p.char]; el.classList.toggle('dn', p.down || p.out);
@@ -89,12 +108,15 @@ function updateHud() {
     el.querySelector('.st')!.textContent = !p.connected ? 'SIN RED' : p.out ? 'FUERA' : p.down ? `AYUDA ${Math.ceil(p.downT / 60)}s` : p.vehicle ? 'BLINDADA' : `${Math.ceil(p.hp)}`;
     el.querySelector<HTMLElement>('.hp')!.style.width = `${Math.max(0, p.vehicle ? Math.min(100, p.vehicle / 1.2) : p.hp / p.maxHp * 100)}%`;
     el.querySelector<HTMLElement>('.meter')!.style.width = `${p.meter}%`; el.querySelector('.mt')!.classList.toggle('full', p.meter >= 100);
-    el.querySelector('.w')!.textContent = `${p.meter >= 100 ? '★ LISTO · ' : ''}${WEAPONS[p.weapon].name}${p.ammo ? ` ${p.ammo}` : ''} · G ${p.grenades}`;
+    el.querySelector('.w')!.textContent = `${p.counterT > 0 ? '↯ ' : p.meter >= 100 ? '★ ' : ''}${WEAPONS[p.weapon].name}${p.ammo ? ` ${p.ammo}` : ''} · G ${p.grenades}`;
   }
   const lv = LEVELS[s.levelIdx];
   $('#mission-name').textContent = `0${s.levelIdx + 1} / ${lv.name}`;
-  $('#mission-objective').textContent = s.bossId ? 'Derrotá al jefe' : s.arenaOn ? `EMBOSCADA · Oleada ${s.wave + 1}` : lv.objective;
+  const arena = lv.arenas[s.arenaIdx];
+  const sector = lv.sections.findLast(section => section.x <= s.camX + W * .5);
+  $('#mission-objective').textContent = s.bossId ? 'Derrotá al jefe' : s.arenaOn ? arena?.waveLabels?.[s.wave] ?? arena?.label ?? lv.objective : sector?.label ?? lv.objective;
   $('#mission-progress').style.width = `${Math.min(100, (s.camX + W) / lv.width * 100)}%`;
+  $('#mission-records').textContent = `◇ ${countRecords(s)}/${MISSION_RECORDS[s.levelIdx].positions.length} · ${MISSION_RECORDS[s.levelIdx].name}`;
   $('#score').textContent = String(s.score).padStart(7, '0'); $('#lives').textContent = `♥ ${s.lives} vidas de equipo`;
   $('#hits').hidden = s.combo < 2; $('#combo').textContent = `${s.combo} ×`; $('#multiplier').textContent = `COMBO · PUNTOS ×${Math.min(10, 1 + Math.floor(s.combo / 5)) * (s.frenzy > 0 ? 2 : 1)}`;
   $('#combo-life').style.width = `${s.comboT / 170 * 100}%`;
@@ -102,8 +124,14 @@ function updateHud() {
   $('#frenzy-fill').style.width = `${s.frenzy > 0 ? s.frenzy / 480 * 100 : s.frenzyCharge}%`;
   const foe = s.enemies.find(e => e.id === s.lastHit && e.id !== s.bossId); $('#foe').hidden = !foe;
   if (foe) { $('#fn').textContent = FOE[foe.type] ?? ''; $('#fh').style.width = `${Math.max(0, foe.hp / foe.maxHp * 100)}%`; }
-  const b = s.enemies.find(e => e.id === s.bossId); $('#bossbar').hidden = !b;
-  if (b) { $('#bn').textContent = ENEMIES[b.type].name ?? ''; $('#bh').style.width = `${Math.max(0, b.hp / b.maxHp * 100)}%`; $('#boss-phase').textContent = b.hp < b.maxHp * .2 ? 'FURIA' : b.hp < b.maxHp * .5 ? 'FASE 2' : 'FASE 1'; }
+  const b = s.enemies.find(e => e.id === s.bossId), bossBar = $('#bossbar'); bossBar.hidden = !b;
+  if (b) {
+    bossBar.classList.toggle('boss-vulnerable', bossVulnerable(b));
+    $('#bn').textContent = ENEMIES[b.type].name ?? '';
+    $('#bh').style.width = `${Math.max(0, b.hp / b.maxHp * 100)}%`;
+    $('#boss-phase').textContent = `FASE ${bossPhase(b)} / 3`;
+    $('#boss-attack').textContent = bossVulnerable(b) ? 'VULNERABLE' : b.attack?.label ?? 'JEFE DE MISIÓN';
+  }
   const localP = s.players[mode === 'guest' ? guestSlot : inp.assign.values().next().value ?? 0];
   const grenade = touch.querySelector<HTMLElement>('[data-btn="G"]'); if (grenade && localP) { grenade.dataset.count = String(localP.grenades); grenade.classList.toggle('empty', !localP.grenades); }
   touch.querySelector('[data-btn="X"]')?.classList.toggle('charged', (localP?.meter ?? 0) >= 100);
@@ -116,13 +144,17 @@ function updateNetwork() {
   el.textContent = mode === 'local' ? 'LOCAL' : `● ${roomCode} · ${lag ? `${Math.round(lag)} ms` : 'ONLINE'}`; el.classList.toggle('weak', (lag ?? 0) > 180);
 }
 function renderUi() {
-  const key = [mode, menuView, paused, netDown, roomCode, guestSlot, errorMsg, audio.muted, r.reducedMotion, r.lowFx, s.phase, s.levelIdx, s.line, s.phase === 'select' ? s.players.map(p => `${p.joined}${p.ready}${p.cursor}`).join() : '', inp.padCount].join(':');
+  stage.classList.toggle('reduced-motion', r.reducedMotion);
+  const key = [mode, menuView, paused, netDown, roomCode, guestSlot, errorMsg, connecting, best, audio.muted, r.reducedMotion, r.lowFx, s.phase, s.levelIdx, s.line, s.replay, s.phase === 'select' ? s.players.map(p => `${p.joined}${p.ready}${p.cursor}`).join() : '', inp.padCount].join(':');
   if (key === uiKey) return; uiKey = key;
-  ui.innerHTML = screenHtml({ s, mode, menuView, paused, netDown, room: roomCode, guestSlot, localSlot: inp.assign.values().next().value ?? 0, portraits, error: errorMsg, muted: audio.muted, reducedMotion: r.reducedMotion, lowFx: r.lowFx, best, touch: touchDevice, connecting });
+  const focused = ui.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.a : undefined;
+  const codeValue = ui.querySelector<HTMLInputElement>('#code')?.value;
+  ui.innerHTML = screenHtml({ s, mode, menuView, paused, netDown, room: roomCode, guestSlot, localSlot: inp.assign.values().next().value ?? 0, portraits, error: errorMsg, muted: audio.muted, reducedMotion: r.reducedMotion, lowFx: r.lowFx, best, touch: touchDevice, connecting, medals });
   ui.querySelectorAll<HTMLElement>('[data-a]').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); action(el.dataset.a!); }));
   ui.querySelectorAll<HTMLButtonElement>('[data-card]').forEach(el => el.addEventListener('click', () => { audio.unlock(); inp.pick = pickBits(+el.dataset.card!); routeClick(); }));
   const code = document.querySelector<HTMLInputElement>('#code');
-  if (code) { if (!touchDevice) code.focus(); code.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') action('dojoin'); }); }
+  if (code) { code.value = codeValue ?? ''; if (!touchDevice) code.focus(); code.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') action('dojoin'); }); }
+  if (focused) ui.querySelector<HTMLElement>(`[data-a="${focused}"]`)?.focus({ preventScroll: true });
 }
 function routeClick() { const t = !touchDevice && inp.assign.size === 0 ? 'kb1' : inp.clickTarget(); if (t !== 'touch') { clickBits = inp.pick | inp.pulse; inp.pick = 0; inp.pulse = 0; clickTo = t; } }
 const origRead = inp.read.bind(inp);

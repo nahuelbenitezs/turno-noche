@@ -2,6 +2,7 @@
 import type { GameState } from '../sim/sim';
 import { ENEMIES, WEAPONS } from '../sim/data';
 import { LEVELS } from '../sim/levels';
+import { MISSION_RECORDS } from '../sim/records';
 
 export interface Link { send(data: unknown): void; close(): void; onData?: (d: any) => void; onClose?: () => void; readonly connected?: boolean; readonly latencyMs?: number | null }
 export type Msg = { t: 'hello'; slot: number } | { t: 'full' } | { t: 'input'; i: number } | { t: 'snap'; s: Snapshot };
@@ -21,23 +22,30 @@ const record = (value: unknown): value is Record<string, any> => value !== null 
 const numbers = (value: Record<string, any>, keys: string[]) => keys.every(key => typeof value[key] === 'number' && Number.isFinite(value[key]));
 const body = (value: unknown): value is Record<string, any> => record(value) && numbers(value, ['id', 'z', 'x', 'y', 'w', 'h', 'vx', 'vy']);
 const character = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 4;
+const natural = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+const bossAttack = (value: unknown) => record(value)
+  && ['charge', 'slam', 'sweep', 'salvo', 'signal', 'reinforcements'].includes(value.kind)
+  && typeof value.label === 'string' && numbers(value, ['x', 'w', 'z', 'depth', 'tell', 'duration']);
 /** Nunca entrega un estado a medio validar: una foto dañada no reemplaza la partida. */
 export function decodeSnapshot(json: string): GameState {
   if (json.length > 1000000) throw new Error('Estado de sala demasiado grande.');
   const value: unknown = JSON.parse(json);
   if (!record(value) || !['select', 'story', 'play', 'clear', 'gameover', 'ending'].includes(value.phase)
     || !Number.isInteger(value.levelIdx) || value.levelIdx < 0 || value.levelIdx >= LEVELS.length
+    || typeof value.replay !== 'boolean' || !record(value.mission) || !natural(value.mission.records)
+    || value.mission.records >= 2 ** MISSION_RECORDS[value.levelIdx].positions.length || !natural(value.mission.ticks) || !natural(value.mission.falls)
     || !numbers(value, ['tick', 'phaseT', 'line', 'camX', 'score', 'lives', 'shake', 'slow', 'combo', 'comboT', 'frenzy', 'frenzyCharge'])
     || !record(value.stats) || !numbers(value.stats, ['kills', 'deaths', 'rescued', 'bestCombo', 'ticks'])
     || !Array.isArray(value.players) || value.players.length !== 4
     || !value.players.every((p: unknown, slot: number) => body(p) && p.slot === slot && character(p.char) && character(p.cursor)
       && typeof p.joined === 'boolean' && typeof p.ready === 'boolean' && typeof p.connected === 'boolean'
       && typeof p.weapon === 'string' && Object.hasOwn(WEAPONS, p.weapon)
-      && numbers(p, ['hp', 'maxHp', 'meter', 'grenades', 'ammo', 'face', 'iframes', 'flash', 'downT', 'dashT', 'meleeT', 'specialT']) && p.maxHp > 0)
-    || !Array.isArray(value.enemies) || !value.enemies.every((e: unknown) => body(e) && typeof e.type === 'string' && Object.hasOwn(ENEMIES, e.type) && numbers(e, ['hp', 'maxHp', 'face', 't', 'st', 'cd', 'stun', 'flash']))
+      && numbers(p, ['hp', 'maxHp', 'meter', 'grenades', 'ammo', 'face', 'iframes', 'flash', 'downT', 'dashT', 'meleeT', 'specialT', 'dashX', 'dashZ', 'counterT', 'meleeBuffer']) && p.maxHp > 0)
+    || !Array.isArray(value.enemies) || !value.enemies.every((e: unknown) => body(e) && typeof e.type === 'string' && Object.hasOwn(ENEMIES, e.type) && numbers(e, ['hp', 'maxHp', 'face', 't', 'st', 'cd', 'stun', 'flash']) && (e.attack === undefined || bossAttack(e.attack)))
     || !Array.isArray(value.bullets) || !value.bullets.every((b: unknown) => record(b) && numbers(b, ['id', 'z', 'x', 'y', 'vx', 'vy', 'life', 'dmg', 'r']) && typeof b.kind === 'string' && Array.isArray(b.hits))
     || !Array.isArray(value.props) || !value.props.every((p: unknown) => body(p) && ['crate', 'barrel', 'prisoner', 'vehicle'].includes(p.kind) && numbers(p, ['hp', 'freed']))
-    || !Array.isArray(value.pickups) || !value.pickups.every((p: unknown) => body(p) && (p.drop === 'food' || Object.hasOwn(WEAPONS, p.drop)) && numbers(p, ['life']))
+    || !Array.isArray(value.pickups) || !value.pickups.every((p: unknown) => body(p) && numbers(p, ['life'])
+      && (p.drop === 'record' ? natural(p.record) && p.record < MISSION_RECORDS[value.levelIdx].positions.length : p.drop === 'food' || Object.hasOwn(WEAPONS, p.drop)))
     || !Array.isArray(value.events) || !value.events.every((e: unknown) => record(e) && typeof e.k === 'string' && numbers(e, ['x', 'y']) && (e.a === undefined || Number.isFinite(e.a)) && (e.s === undefined || typeof e.s === 'string'))) {
     throw new Error('Estado de sala inválido.');
   }
@@ -81,7 +89,7 @@ export class HostSession {
   close() { for (const [slot, link] of [...this.links]) { this.drop(slot); link.close(); } }
 }
 
-export const roomPrefix = 'turno-noche-v2-';
+export const roomPrefix = 'turno-noche-v3-';
 export function makeRoomCode(rand = Math.random) { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; let c = ''; for (let i = 0; i < 5; i++) c += a[Math.floor(rand() * a.length)]; return c; }
 export const normalizeCode = (c: string) => c.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
 

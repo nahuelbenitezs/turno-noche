@@ -5,10 +5,20 @@ const K1: Record<string, number> = { KeyA: BTN.L, KeyD: BTN.R, KeyW: BTN.U, KeyS
 const K2: Record<string, number> = { ArrowLeft: BTN.L, ArrowRight: BTN.R, ArrowUp: BTN.U, ArrowDown: BTN.D, Period: BTN.J, Comma: BTN.S, Slash: BTN.M, Semicolon: BTN.X, ShiftRight: BTN.DASH, Enter: BTN.G, Numpad2: BTN.J, Numpad1: BTN.S, Numpad3: BTN.M, Numpad5: BTN.X, Numpad0: BTN.DASH, Numpad4: BTN.G };
 const ACTIONS = BTN.J | BTN.S | BTN.M | BTN.X | BTN.G;
 
+export function gamepadBits(g: Gamepad) {
+  const b = (i: number) => !!g.buttons[i]?.pressed;
+  let v = 0;
+  const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
+  if (b(14) || ax < -.4) v |= BTN.L; if (b(15) || ax > .4) v |= BTN.R; if (b(12) || ay < -.55) v |= BTN.U; if (b(13) || ay > .55) v |= BTN.D;
+  if (b(0)) v |= BTN.J; if (b(2) || b(7)) v |= BTN.S; if (b(1)) v |= BTN.M; if (b(3)) v |= BTN.X; if (b(4) || b(6)) v |= BTN.DASH; if (b(5)) v |= BTN.G;
+  return v;
+}
+
 export class Inputs {
   claimPrimary = false;
   held = new Set<string>(); tapped = new Set<string>(); touch = 0; touchTapped = 0; pick = 0; pulse = 0; assign = new Map<string, number>(); usedTouch = false; onGamepad?: (n: number) => void; padCount = 0;
   private touchReset?: () => void;
+  private blockedPad = new Map<number, number>();
   constructor() {
     addEventListener('keydown', e => {
       const el = e.target as HTMLElement | null;
@@ -21,25 +31,25 @@ export class Inputs {
     });
     addEventListener('keyup', e => this.held.delete(e.code));
     addEventListener('blur', () => this.reset());
-    addEventListener('gamepaddisconnected', e => this.assign.delete('pad' + e.gamepad.index));
+    addEventListener('gamepaddisconnected', e => { this.assign.delete('pad' + e.gamepad.index); this.blockedPad.delete(e.gamepad.index); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.reset(); });
   }
   /** Limpiar controles al pausar o cambiar de pantalla conserva los lugares de los jugadores. */
   reset() { this.held.clear(); this.tapped.clear(); this.touch = this.touchTapped = this.pick = this.pulse = 0; this.touchReset?.(); }
   setTouchReset(fn: () => void) { this.touchReset = fn; }
   private kb(map: Record<string, number>) { let v = 0; for (const c in map) if (this.held.has(c) || this.tapped.has(c)) v |= map[c]; return v; }
-  private pad(g: Gamepad) {
-    const b = (i: number) => !!g.buttons[i]?.pressed; let v = 0; const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
-    if (b(14) || ax < -.4) v |= BTN.L; if (b(15) || ax > .4) v |= BTN.R; if (b(12) || ay < -.55) v |= BTN.U; if (b(13) || ay > .55) v |= BTN.D;
-    if (b(0)) v |= BTN.J; if (b(2) || b(7)) v |= BTN.S; if (b(1)) v |= BTN.M; if (b(3)) v |= BTN.X; if (b(4) || b(6)) v |= BTN.DASH; if (b(5)) v |= BTN.G;
-    return v;
-  }
+  blockPadButton(index: number, button: number) { this.blockedPad.set(index, (this.blockedPad.get(index) ?? 0) | button); }
   /** Lee cada dispositivo una vez; conserva los toques que comenzaron y terminaron entre cuadros. */
   read(): Map<string, number> {
     const m = new Map<string, number>();
     m.set('kb1', this.kb(K1)); m.set('kb2', this.kb(K2)); this.tapped.clear();
     const pads = new Set<string>();
-    if (navigator.getGamepads) for (const g of navigator.getGamepads()) if (g && g.connected) { const name = 'pad' + g.index; pads.add(name); m.set(name, this.pad(g)); }
+    if (navigator.getGamepads) for (const g of navigator.getGamepads()) if (g && g.connected) {
+      const name = 'pad' + g.index, bits = gamepadBits(g), blocked = bits & (this.blockedPad.get(g.index) ?? 0);
+      if (blocked) this.blockedPad.set(g.index, blocked);
+      else this.blockedPad.delete(g.index);
+      pads.add(name); m.set(name, bits & ~blocked);
+    }
     for (const name of this.assign.keys()) if (name.startsWith('pad') && !pads.has(name)) this.assign.delete(name);
     if (pads.size !== this.padCount) { this.padCount = pads.size; this.onGamepad?.(pads.size); }
     let t = this.touch | this.touchTapped; this.touchTapped = 0;

@@ -1,6 +1,8 @@
 import { CHARS, ENDING, ENEMIES, STORY } from './sim/data';
 import type { StoryLine } from './sim/data';
 import { LEVELS } from './sim/levels';
+import { MISSION_RECORDS } from './sim/records';
+import { missionResult } from './sim/sim';
 import type { GameState } from './sim/sim';
 
 export type MenuView = 'main' | 'keys' | 'join' | 'creating' | 'missions' | 'settings';
@@ -21,6 +23,7 @@ export interface UiContext {
   best: number;
   touch: boolean;
   connecting: boolean;
+  medals?: readonly number[];
 }
 
 const asset = (name: string) => `${import.meta.env.BASE_URL}arte/${name}.webp`;
@@ -30,6 +33,10 @@ const routeColors = ['#ffc266', '#7ce6c9', '#ff9f76', '#b5a2ff', '#ffc073'];
 const scene = (i: number) => `--scene:url('${asset(`fondo${i + 1}-${scenes[i]}`)}');--scene-accent:${routeColors[i]}`;
 const points = (score: number) => score.toLocaleString('es-UY');
 const number = (i: number) => String(i + 1).padStart(2, '0');
+const timeAt = (ticks: number) => {
+  const seconds = Math.floor(ticks / 60);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+};
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
@@ -64,7 +71,7 @@ export const KEYS = `<div class="keys">
   <div class="combat-guide">
     <h3>Ganá espacio</h3>
     <p>Golpeá un proyectil para devolverlo. Golpeá en el aire para caer en picada.</p>
-    <p>Esquivá en el último instante para cargar tu especial y el frenesí del equipo.</p>
+    <p>Esquivá a tiempo para potenciar tu próximo impacto. Alterná jugadores sobre el mismo enemigo para coordinar un golpe de equipo.</p>
     <h3>Cuidá a la cuadrilla</h3>
     <p>Quedate al lado de un compañero caído para levantarlo. Rescatá prisioneros para conseguir suministros.</p>
   </div>
@@ -81,16 +88,17 @@ function route(index: number, completed = false) {
   </ol>`;
 }
 
-function tally(s: GameState) {
-  const elapsed = Math.floor(s.stats.ticks / 60);
-  const time = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
-  const entries = [
-    ['Bajas', s.stats.kills], ['Rescates', s.stats.rescued], ['Mejor combo', s.stats.bestCombo],
-    ['Proyectiles devueltos', s.stats.parries], ['Esquivas perfectas', s.stats.dodges], ['Tiempo activo', time],
-  ] as const;
-  return `<dl class="tally" aria-label="Estadísticas acumuladas de campaña">
-    ${entries.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
+function tally(entries: ReadonlyArray<readonly [string, number | string]>, label: string) {
+  return `<dl class="tally" aria-label="${label}">
+    ${entries.map(([name, value]) => `<div><dt>${name}</dt><dd>${value}</dd></div>`).join('')}
   </dl>`;
+}
+
+function campaignTally(s: GameState) {
+  return tally([
+    ['Bajas', s.stats.kills], ['Rescates', s.stats.rescued], ['Mejor combo', s.stats.bestCombo],
+    ['Proyectiles devueltos', s.stats.parries], ['Esquivas perfectas', s.stats.dodges], ['Tiempo activo', timeAt(s.stats.ticks)],
+  ], 'Estadísticas acumuladas de campaña');
 }
 
 function title(c: UiContext) {
@@ -124,7 +132,8 @@ function menu(c: UiContext) {
   switch (c.menuView) {
     case 'keys':
       return panel('controls-screen', `${heading('Cómo jugar', 'Esc o P abre la pausa. M cambia el sonido.')}
-        ${KEYS}${button('back', 'Volver al inicio', true)}`);
+        ${KEYS}<p class="note controls-note">Con mando, usá la cruz y A para elegir en los menús. Start abre la pausa.</p>
+        ${button('back', 'Volver al inicio', true)}`);
     case 'settings':
       return panel('settings-screen', `${heading('Ajustes', 'Tus preferencias se guardan en este dispositivo.')}
         <div class="settings-list">
@@ -149,9 +158,14 @@ function menu(c: UiContext) {
       return panel('dossier', `${heading('La ruta del amanecer', 'Cinco misiones para recuperar el sol.')}
         <div class="missions">${LEVELS.map((lv, i) => {
           const boss = lv.arenas.find(a => a.boss)?.boss;
-          return `<article style="${scene(i)}"><span class="mission-number">${number(i)}</span><div>
+          const open = i === 0 || (c.medals?.[i - 1] ?? 0) > 0;
+          const medal = ['', 'B', 'A', 'S'][c.medals?.[i] ?? 0];
+          return `<article style="${scene(i)}"><div class="mission-card-top"><span class="mission-number">${number(i)}</span>
+            ${medal ? `<b class="mission-medal" aria-label="Mejor rango ${medal}">${medal}</b>` : ''}</div><div>
             <h3>${esc(lv.name)}</h3><p>${esc(lv.objective)}</p>
             ${boss ? `<p class="mission-boss">${esc(ENEMIES[boss].name ?? '')}</p>` : ''}
+            ${open ? `<button class="m alt mission-replay" data-a="replay-${i}" aria-label="Jugar ${esc(lv.name)}">Jugar misión ↗</button>`
+              : '<span class="mission-replay" aria-disabled="true">Completá la anterior</span>'}
           </div></article>`;
         }).join('')}</div>
         ${footer(button('back', 'Volver'), button('local', 'Entrar de turno →', true))}`);
@@ -188,7 +202,7 @@ function selection(c: UiContext) {
   </li>`).join('');
   const tip = c.mode === 'guest' ? `Sos J${c.guestSlot + 1}. El anfitrión arranca cuando todos estén listos.`
     : c.mode === 'host' ? 'Compartí la invitación y arrancá cuando todos estén listos.'
-    : c.touch ? 'Tocá una carta para confirmar tu personaje.' : 'Elegí una carta o sumá jugadores con J, coma o A. Usá izquierda y derecha para elegir.';
+    : c.touch ? 'Tocá una carta para confirmar tu personaje.' : 'Sumá jugadores con J, coma o A. En mando, apretá Start cuando todos estén listos.';
   return panel('select-screen', `<header class="selection-heading">
     <h2>Armá la cuadrilla<span>.</span></h2>
     <div class="lobby-meta">${c.room ? `<span>Sala <b class="roomcode">${esc(c.room)}</b></span>
@@ -198,7 +212,7 @@ function selection(c: UiContext) {
     <div class="cards">${cards}</div>
     <footer class="selection-footer">
       <p class="hint">${tip}</p>
-      ${footer(button('reload', 'Salir'), me?.ready || players.length > 0 && !c.touch ? button('unready', 'Cambiar personaje') : '',
+      ${footer(button('reload', 'Salir'), me?.ready ? button('unready', 'Cambiar personaje') : '',
         c.mode !== 'guest' ? `<button class="m" data-a="begin" ${allReady ? '' : 'disabled'}>Arrancar turno →</button>` : '')}
     </footer>`);
 }
@@ -240,28 +254,31 @@ export function screenHtml(c: UiContext): string {
         <p class="chapter">${number(s.levelIdx)} / ${LEVELS.length} · Misión</p>
         <h2>${esc(lv.name)}</h2>
         <p>${esc(lv.objective)}</p>
+        <p class="briefing-record">${MISSION_RECORDS[s.levelIdx].name} · ${MISSION_RECORDS[s.levelIdx].positions.length} para encontrar</p>
       </header>
       ${dialogue(c, line, lines.length, s.line === lines.length - 1 ? 'Empezar →' : 'Seguir →')}
       <p class="more">${c.touch ? 'Tocá el botón para seguir.' : 'Salto o disparo para seguir'}</p>
     </section>`;
   }
   if (s.phase === 'clear') {
-    const rank = s.stats.deaths === 0 ? 'S' : s.stats.bestCombo >= 20 ? 'A' : 'B';
+    const { rank, records, ticks, falls } = missionResult(s);
+    const recordGoal = MISSION_RECORDS[s.levelIdx];
     return `<section class="screen results" style="${scene(s.levelIdx)}">
       ${route(s.levelIdx, true)}
       <div class="result-heading"><span class="rank" aria-label="Rango ${rank}">${rank}</span>
         <div><p class="chapter">Misión ${number(s.levelIdx)} completada</p><h2>${esc(lv.name)}</h2>
         <p class="bignum">${points(s.score)} <small>PTS DE CAMPAÑA</small></p></div>
       </div>
-      ${tally(s)}
-      ${button('next', s.levelIdx === LEVELS.length - 1 ? 'Devolvé el amanecer →' : 'Siguiente misión →', true)}
+      ${tally([[recordGoal.name, `${records} / ${recordGoal.positions.length}`], ['Caídas', falls], ['Tiempo de misión', timeAt(ticks)]], 'Resultado de la misión')}
+      ${s.replay ? button('reload', 'Volver al inicio', true)
+        : button('next', s.levelIdx === LEVELS.length - 1 ? 'Devolvé el amanecer →' : 'Siguiente misión →', true)}
     </section>`;
   }
   if (s.phase === 'gameover') {
     const retry = s.atBoss ? 'El jefe conserva el daño recibido.'
       : s.checkpoint ? 'Volvés al último punto de control.' : 'Volvés al comienzo de la misión.';
     return panel('results gameover', `${heading('Nos vemos en cinco.', `${retry} Continuar cuesta la mitad del puntaje.`)}
-      <p class="bignum">${points(s.score)} <small>PTS</small></p>${tally(s)}
+      <p class="bignum">${points(s.score)} <small>PTS</small></p>${campaignTally(s)}
       ${footer(button('reload', 'Cerrar el turno'), button('next', 'Continuar →', true))}`);
   }
   if (s.phase === 'ending') {
@@ -270,7 +287,7 @@ export function screenHtml(c: UiContext): string {
       ? `${heading('Al fin salió el sol.')}${dialogue(c, line, ENDING.length, 'Seguir →')}`
       : `${route(LEVELS.length - 1, true)}${heading('Fin del turno')}
         <p class="bignum">${points(s.score)} <small>PTS FINALES</small></p>
-        ${tally(s)}<p class="note">Un juego de Nahuel Benítez.</p>
+        ${campaignTally(s)}<p class="note">Un juego de Nahuel Benítez.</p>
         ${button('next', 'Otra noche más →', true)}`);
   }
   return `<div class="play-tools">

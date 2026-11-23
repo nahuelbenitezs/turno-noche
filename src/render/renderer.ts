@@ -2,7 +2,7 @@
 import { Application, Container, Graphics, Sprite, Text, Texture, TilingSprite } from 'pixi.js';
 import { CHARS, EnemyType, H, W, isBoss } from '../sim/data';
 import { LEVELS, hazardZone } from '../sim/levels';
-import { Bullet, Enemy, Ev, GameState, Player, bossAttackBounds } from '../sim/sim';
+import { Bullet, Enemy, Ev, GameState, Player, bossAttackBounds, bossVulnerable } from '../sim/sim';
 import { BOSS_SHEET, Frame, HEROES, Sheet, actionArt, beamTex, chunkTex, glowTex, loadArt, vignetteTex } from './art';
 import { THEME_LIGHT, buildScenery, drawTrainWindows, stageMotifs } from './scene';
 
@@ -19,7 +19,11 @@ const OBJ_SIZE: Record<string, number> = { crate: 46, barrel: 56, prisoner: 62, 
 const FX = { slash: 0, spark: 1, boom: 2, dust: 3, fire: 4, heal: 5 };
 const heroFrame = (r: number, c: number) => r * 6 + c;
 
-interface Part { s: Sprite; vx: number; vy: number; g: number; life: number; max: number; spin: number; grow: number; alpha?: number; frames?: Texture[] }
+interface Part { s: Sprite; vx: number; vy: number; g: number; life: number; max: number; spin: number; grow: number; alpha?: number; frames?: Texture[]; delay?: number }
+interface ParticleOptions {
+  tex?: Texture; size?: number; life?: number; v?: number; vx?: number; vy?: number; g?: number;
+  add?: boolean; grow?: number; spin?: number; noRot?: boolean; delay?: number;
+}
 interface Rig { c: Container; body: Sprite; veh: Sprite; tag: Text; char: number; k: number; gait: number; z: number; grounded: boolean; landing: number; special: number }
 
 export class Renderer {
@@ -246,6 +250,14 @@ export class Renderer {
         g.roundRect(e.x - w / 2 - 1, y - h - 8, w + 2, 5, 1).fill({ color: 0x080c1c, alpha: .85 });
         g.rect(e.x - w / 2, y - h - 7, w * Math.max(0, e.hp / e.maxHp), 3).fill(e.stun > 0 ? 0x8edbff : 0xff786a);
       }
+      const support = e.support;
+      if (support && s.tick <= support.until && s.tick >= support.readyAt &&
+        s.players.some(p => p.joined && !p.out && !p.down && p.slot !== support.slot)) {
+        const markY = y - h - 17;
+        g.moveTo(e.x - 11, markY - 4).lineTo(e.x - 6, markY).lineTo(e.x - 11, markY + 4)
+          .moveTo(e.x + 11, markY - 4).lineTo(e.x + 6, markY).lineTo(e.x + 11, markY + 4)
+          .stroke({ color: 0xbaf6fa, width: 1.5, alpha: .85 });
+      }
       if (e.type === 'exploder' && e.st > 0) {
         g.ellipse(e.x, 380 + e.z, 80, 22).fill({ color: 0xff443a, alpha: .12 }).stroke({ color: 0xff7a61, width: 2, alpha: .8 });
       }
@@ -333,7 +345,7 @@ export class Renderer {
       const y = 380 + z, on = a.elapsed >= a.tell;
       const strength = on ? 1 : Math.min(1, a.elapsed / a.tell);
       const color = on ? 0xff6d5c : 0xffc66e;
-      if (a.kind === 'charge' || a.kind === 'slam' || a.kind === 'sweep') {
+      if (a.kind === 'charge' || a.kind === 'slam' || a.kind === 'sweep' || a.pattern === 'pulse' || a.pattern === 'mortar') {
         this.dangerFloor(x, y, w, depth, color, strength, on);
         if (a.kind === 'charge' && !on) for (let x1 = Math.max(x + 20, this.camShown); x1 < x + w - 12; x1 += 52) {
           g.moveTo(x1 - 7 * a.dir, y - 7).lineTo(x1 + 3 * a.dir, y).lineTo(x1 - 7 * a.dir, y + 7)
@@ -368,32 +380,51 @@ export class Renderer {
     }
   }
   draw(s: GameState) {
-    this.t++;
+    const now = performance.now();
+    this.dt = this.drawAt ? Math.max(.1, Math.min(2, (now - this.drawAt) * .06)) : 1;
+    this.drawAt = now; this.t += this.dt;
     const newTick = s.tick !== this.lastSimTick; this.lastSimTick = s.tick;
     const lvIdx = Math.min(s.levelIdx, LEVELS.length - 1);
     if (this.levelDrawn !== lvIdx) { this.drawLevel(lvIdx); this.objs.forEach(o => o.destroy()); this.objs.clear(); this.camShown = s.camX; }
-    const mag = this.reducedMotion ? 0 : Math.min(18, s.shake + this.shakeExtra); this.shakeExtra *= .85;
+    const mag = this.reducedMotion ? 0 : Math.min(18, s.shake + this.shakeExtra); this.shakeExtra *= .85 ** this.dt;
     const sx = (Math.sin(this.t * 1.9) + Math.sin(this.t * 3.1)) * mag * .2, sy = (Math.cos(this.t * 2.3) + Math.sin(this.t * 2.9)) * mag * .2;
-    this.camShown += (s.camX - this.camShown) * (Math.abs(s.camX - this.camShown) > 300 ? 1 : this.smooth);
+    const smooth = 1 - (1 - this.smooth) ** this.dt;
+    this.camShown += (s.camX - this.camShown) * (Math.abs(s.camX - this.camShown) > 300 ? 1 : smooth);
     this.world.x = -this.camShown; this.root.position.set(sx, sy);
-    this.zoomPunch *= .85; const z = 1 + (this.reducedMotion ? 0 : Math.min(.035, this.zoomPunch)); this.root.scale.set(z); this.root.pivot.set(W / 2 * (z - 1) / z, H / 2 * (z - 1) / z);
-    this.flash.alpha *= .78;
+    this.zoomPunch *= .85 ** this.dt; const z = 1 + (this.reducedMotion ? 0 : Math.min(.035, this.zoomPunch)); this.root.scale.set(z); this.root.pivot.set(W / 2 * (z - 1) / z, H / 2 * (z - 1) / z);
+    this.flash.alpha *= .78 ** this.dt;
     if (this.reducedMotion) this.flash.alpha = Math.min(.035, this.flash.alpha);
-    if (this.backdrop) { this.backdrop.x = this.camShown - 2; this.backdrop.tilePosition.x = -this.camShown * .72; }
+    if (this.backdrop) {
+      this.backdrop.x = this.camShown - 2; this.backdrop.tilePosition.x = -this.camShown * .72;
+      if (LEVELS[lvIdx].theme === 2) {
+        this.windows.x = this.camShown;
+        drawTrainWindows(this.windows.clear(), this.backdrop.tilePosition.x - 2, this.backdrop.tileScale.x, this.reducedMotion ? 0 : this.t);
+      }
+    }
+    if (!this.lowFx) for (const [i, light] of this.lights.entries()) {
+      light.alpha = .16 + (this.reducedMotion ? 0 : Math.sin(this.t * .035 + i * 2) * .055);
+    }
 
     for (const p of s.players) this.syncPlayer(s, p);
     const sh = this.shadows.clear();
     const blob = (x: number, zz: number, w: number, c = 0, a = .5) => sh.ellipse(x, 380 + zz, w, Math.max(4, w * .24)).fill({ color: c, alpha: a });
-    for (const p of s.players) if (p.joined && !p.out) { blob(p.x, p.z, 26); blob(p.x, p.z, 20, PLAYER_TINT[p.slot], .75); }
+    for (const p of s.players) if (p.joined && !p.out) {
+      const lift = Math.max(0, 460 - p.y);
+      blob(p.x, p.z, 23 + lift * .06, 0x09090d, .58 - Math.min(.3, lift / 350));
+      blob(p.x, p.z, 17, PLAYER_TINT[p.slot], p.ground ? .62 : .28);
+    }
     const seen = new Set<number>();
     for (const e of s.enemies) {
       seen.add(e.id); blob(e.x, e.z, e.w * .62);
       let o = this.objs.get(e.id); if (!o) { o = new Sprite(Texture.EMPTY); this.actC.addChild(o); this.objs.set(e.id, o); o.position.set(e.x, screenY(e.y, e.z)); }
-      o.x += (e.x - o.x) * this.smooth; o.y += (screenY(e.y, e.z) - o.y) * this.smooth; o.zIndex = e.z;
+      o.x += (e.x - o.x) * smooth; o.y += (screenY(e.y, e.z) - o.y) * smooth; o.zIndex = e.z;
       const f = this.enemyFrame(e); this.setFrame(o, f);
       const base = this.enemyBase(e.type), pop = e.flash > 3 ? 1.06 : 1;
-      o.scale.set(base * pop * (e.face < 0 ? -1 : 1), base * pop);
-      o.tint = e.flash > 3 ? 0xffb0b0 : e.stun > 0 ? 0x9fc7ff : e.type === 'exploder' && e.st > 0 && s.tick % 6 < 3 ? 0xff7070 : 0xffffff;
+      const breath = this.reducedMotion ? 0 : isBoss(e.type) ? Math.sin(s.tick * .07 + e.id) * .017 : Math.sin(e.t * .15) * .018;
+      o.scale.set(base * (pop - breath / 2) * (e.face < 0 ? -1 : 1), base * (pop + breath));
+      o.rotation = this.reducedMotion ? 0 : e.flash > 3 ? -e.face * .045 : !e.ground && !isBoss(e.type) ? e.vx * .019 : 0;
+      o.tint = e.flash > 3 ? 0xffb0b0 : e.stun > 0 || isBoss(e.type) && bossVulnerable(e) ? 0xc0ddff :
+        e.type === 'exploder' && e.st > 0 ? 0xffa391 : 0xffffff;
     }
     for (const o of s.props) {
       seen.add(o.id); blob(o.x, o.z, o.w * .55);
@@ -403,43 +434,113 @@ export class Renderer {
     }
     for (const k of s.pickups) {
       seen.add(k.id); blob(k.x, k.z, 16);
-      let q = this.objs.get(k.id); if (!q) { const key = (k.drop === 'food' ? 'food' : k.drop) as keyof typeof OBJ; q = this.objSprite(key, 42); this.actC.addChild(q); this.objs.set(k.id, q); }
-      q.position.set(k.x, screenY(k.y, k.z) - 4 + Math.sin(s.tick * .12 + k.id) * 3); q.zIndex = k.z; q.visible = k.life > 120 || s.tick % 10 < 6;
+      let q = this.objs.get(k.id);
+      if (!q) {
+        const record = k.drop === 'record' ? this.sheets.archivos?.[lvIdx] : null;
+        if (record) {
+          q = new Sprite(record.tex); q.anchor.set(record.ax, record.ay); q.scale.set(44 / Math.max(record.bw, record.bh));
+        } else {
+          q = this.objSprite(k.drop === 'record' ? 'caja' : k.drop as keyof typeof OBJ, 42);
+          if (k.drop === 'record') q.tint = RECORD_COLOR;
+        }
+        this.actC.addChild(q); this.objs.set(k.id, q);
+      }
+      const y = screenY(k.y, k.z);
+      q.position.set(k.x, y - 4 + (this.reducedMotion ? 0 : Math.sin(s.tick * .12 + k.id) * 3));
+      q.zIndex = k.z; q.visible = k.drop === 'record' || k.life > 120 || s.tick % 10 < 6;
+      if (k.drop === 'record') {
+        blob(k.x, k.z, 26, RECORD_COLOR, .35);
+        if (newTick && !this.reducedMotion && s.tick % 13 === k.id % 13 && Math.abs(k.x - this.camShown - W / 2) < W / 2 + 40) {
+          this.spawn(k.x, y - 19, RECORD_COLOR, { tex: this.glow, size: .24, life: 20, add: true, v: .9, vy: -1.4 });
+        }
+      }
     }
     for (const b of s.bullets) { seen.add(b.id); this.syncBullet(s, b, newTick); }
     this.objs.forEach((o, id) => { if (!seen.has(id)) { o.destroy(); this.objs.delete(id); } });
     this.drawMarkers(s, newTick); this.drawHazards(s); this.drawAtmosphere(s);
     this.stepParts();
-    this.floats = this.floats.filter(f => { f.life--; f.t.y -= .7; f.t.scale.set(Math.min(1, f.t.scale.x + .14)); f.t.alpha = Math.min(1, f.life / 15); if (f.life <= 0) { f.t.destroy(); return false; } return true; });
+    this.floats = this.floats.filter(f => {
+      f.life -= this.dt;
+      if (!this.reducedMotion) { f.t.y -= .7 * this.dt; f.t.scale.set(Math.min(1, f.t.scale.x + .14 * this.dt)); }
+      f.t.alpha = Math.min(1, f.life / 15);
+      if (f.life <= 0) { f.t.destroy(); return false; }
+      return true;
+    });
   }
   private enemyBase(type: EnemyType) { const sh = isBoss(type) ? this.sheets[BOSS_SHEET[type]][0]! : this.sheets.enemigos[ENEMY_ROW[type]! * 6]!; return ENEMY_H[type] / sh.bh; }
   // ---------- Partículas y efectos ----------
-  private spawn(x: number, y: number, tint: number, o: { tex?: Texture; size?: number; life?: number; v?: number; vx?: number; vy?: number; g?: number; add?: boolean; grow?: number; spin?: number; noRot?: boolean } = {}) {
+  private spawn(x: number, y: number, tint: number, o: ParticleOptions = {}) {
     if (this.parts.length >= (this.lowFx ? 80 : 280)) return;
-    const s = new Sprite(o.tex ?? this.chunk); s.anchor.set(.5); s.position.set(x, y); s.tint = tint; if (!o.noRot) s.rotation = Math.random() * 6; s.scale.set(o.size ?? 1);
+    const s = new Sprite(o.tex ?? this.chunk); s.anchor.set(.5); s.position.set(x, y); s.tint = tint;
+    if (!o.noRot) s.rotation = Math.random() * 6;
+    s.scale.set(o.size ?? 1); s.visible = !o.delay;
+    if (o.add) s.blendMode = 'add';
     (o.add ? this.addC : this.fxC).addChild(s);
     const a = Math.random() * 6.28, v = (o.v ?? 2) * (.4 + Math.random() * .8);
-    this.parts.push({ s, vx: (o.vx ?? 0) + Math.cos(a) * v, vy: (o.vy ?? 0) + Math.sin(a) * v, g: o.g ?? 0, life: o.life ?? 24, max: o.life ?? 24, spin: o.noRot ? 0 : o.spin ?? (Math.random() - .5) * .4, grow: o.grow ?? 0 });
+    const p: Part = {
+      s, vx: (o.vx ?? 0) + Math.cos(a) * v, vy: (o.vy ?? 0) + Math.sin(a) * v,
+      g: o.g ?? 0, life: o.life ?? 24, max: o.life ?? 24, spin: o.noRot ? 0 : o.spin ?? (Math.random() - .5) * .4,
+      grow: o.grow ?? 0, delay: o.delay,
+    };
+    this.parts.push(p);
+    return p;
   }
   private stepParts() {
+    const dt = this.dt;
     for (let i = this.parts.length - 1; i >= 0; i--) {
-      const p = this.parts[i]; p.life--; p.vy += p.g; p.s.x += p.vx; p.s.y += p.vy; p.vx *= .97; p.s.rotation += p.spin; if (p.grow) p.s.scale.set(p.s.scale.x + p.grow); p.s.alpha = Math.min(1, p.life / p.max * 1.6) * (p.alpha ?? 1);
+      const p = this.parts[i];
+      if (p.delay && p.delay > 0) {
+        p.delay -= dt;
+        if (p.delay > 0) continue;
+        p.s.visible = true;
+      }
+      p.life -= dt; p.vy += p.g * dt; p.s.x += p.vx * dt; p.s.y += p.vy * dt; p.vx *= .97 ** dt;
+      p.s.rotation += p.spin * dt;
+      if (p.grow) p.s.scale.set(p.s.scale.x + p.grow * dt);
+      if (p.frames) p.s.texture = p.frames[Math.min(p.frames.length - 1, Math.floor((1 - p.life / p.max) * p.frames.length))];
+      p.s.alpha = Math.max(0, Math.min(1, p.life / p.max * 1.8)) * (p.alpha ?? 1);
       if (p.life <= 0) { p.s.destroy(); this.parts.splice(i, 1); }
     }
   }
   private fxSprite(i: number, x: number, y: number, size: number, life: number, o: { grow?: number; vy?: number } = {}) { const f = this.sheets.efectos[i]!; this.spawn(x, y, 0xffffff, { tex: f.tex, size: size / Math.max(f.bw, f.bh), life, v: 0, noRot: true, grow: o.grow, vy: o.vy }); }
-  private boom(x: number, y: number, r: number) {
-    this.fxSprite(FX.boom, x, y - r * .2, r * 2, 20, { grow: .004 });
-    for (let i = 0; i < 7; i++) this.spawn(x, y, 0x333344, { size: 1.3, life: 40, v: 8, g: .35 });
-    this.spawn(x, y, 0xffb060, { tex: this.glow, size: r / 40, life: 10, v: 0, add: true });
-    this.flash.tint = 0xffffff; this.flash.alpha = Math.max(this.flash.alpha, .05);
+  private animated(kind: 'slash' | 'impact' | 'blast', x: number, y: number, size: number, life: number, color: number, face = 1, delay = 0) {
+    const frames = this.animation[kind];
+    const p = this.spawn(x, y, color, { tex: frames[0], size: size / 96, life, v: 0, noRot: true, add: true, delay });
+    if (p) { p.frames = frames; p.s.scale.x *= face; p.alpha = .9; }
+  }
+  private sparks(x: number, y: number, count: number, color: number, power = 6, direction?: number, delay = 0) {
+    if (this.reducedMotion) return;
+    for (let i = 0; i < (this.lowFx ? Math.ceil(count / 2) : count); i++) {
+      const angle = direction === undefined ? Math.random() * Math.PI * 2 : direction + (Math.random() - .5) * 1.05;
+      const speed = power * (.36 + Math.random() * .75);
+      const p = this.spawn(x, y, color, {
+        tex: this.animation.spark, size: .3 + Math.random() * .6, life: 9 + Math.random() * 12,
+        v: 0, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, g: .1, add: true, noRot: true, delay,
+      });
+      if (p) p.s.rotation = angle;
+    }
+  }
+  private boom(x: number, y: number, r: number, delay = 0) {
+    const color = 0xffad5f;
+    this.animated('blast', x, y, r * 2, 24, color, 1, delay);
+    this.spawn(x, y, color, { tex: this.glow, size: r / 44, life: 11, v: 0, add: true, delay });
+    if (!this.reducedMotion) {
+      this.sparks(x, y, 11, 0xffcc83, 9, undefined, delay);
+      for (let i = 0; i < (this.lowFx ? 3 : 6); i++) this.spawn(x, y, 0x727083, {
+        tex: this.animation.smoke, size: .7 + Math.random() * .55, life: 34, v: 3.5, vy: -1.4, grow: .023, delay,
+      });
+    }
+    if (!delay) this.flash.alpha = Math.max(this.flash.alpha, .045);
   }
   private corpse(e: Ev) {
     if (this.parts.length >= (this.lowFx ? 80 : 280)) return;
     const t = e.s as EnemyType; if (!t) return;
-    const boss = isBoss(t); const f = boss ? this.sheets[BOSS_SHEET[t]][7] : this.sheets.enemigos[ENEMY_ROW[t]! * 6 + 5]; if (!f) return;
-    const k = this.enemyBase(t); const sp = new Sprite(f.tex); sp.anchor.set(.5, f.ay); sp.position.set(e.x, e.y + 30); sp.scale.set(k * (e.a === -1 ? -1 : 1), k); this.fxC.addChild(sp);
-    this.parts.push({ s: sp, vx: 0, vy: 0, g: 0, life: boss ? 170 : 55, max: boss ? 170 : 55, spin: 0, grow: 0 });
+    const boss = isBoss(t); const sh = boss ? this.sheets[BOSS_SHEET[t]] : this.sheets.enemigos;
+    const f = boss ? sh[7] : sh[ENEMY_ROW[t]! * 6 + 5]; if (!f) return;
+    const k = this.enemyBase(t); const sp = new Sprite(f.tex); sp.anchor.set(.5, f.ay);
+    sp.position.set(e.x, e.y + (boss ? 50 : 24)); sp.scale.set(k * (e.a === -1 ? -1 : 1), k); this.fxC.addChild(sp);
+    const frames = boss && sh[6] ? [sh[6].tex, ...Array<Texture>(5).fill(f.tex)] : undefined;
+    this.parts.push({ s: sp, vx: 0, vy: 0, g: 0, life: boss ? 170 : 55, max: boss ? 170 : 55, spin: 0, grow: 0, frames });
   }
   floatText(x: number, y: number, str: string, color = 0xffffff, size = 26) {
     const fontSize = Math.min(size, Math.max(16, (W - 100) / Math.max(1, str.length * .66)));

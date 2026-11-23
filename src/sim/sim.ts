@@ -1,7 +1,7 @@
 // Simulación pura y determinista a 60 Hz. El estado es JSON serializable: sirve igual para jugar local,
 // para mandarlo por red y para probarlo sin navegador.
 import { BANTER, BTN, BossType, CHARS, ENDING, ENEMIES, EnemyType, H, PICKUP_WEAPONS, STORY, W, WEAPONS, WeaponId, isBoss, pickOf } from './data';
-import { Arena, LEVELS, Level, Rect, hazardZone } from './levels';
+import { Arena, LEVELS, Level, hazardZone } from './levels';
 import { MISSION_RECORDS } from './records';
 
 export const GRAV = 0.62, MAXFALL = 13, DEPTH = 130;
@@ -32,6 +32,7 @@ export function bossAttackBounds(attack: BossAttack) {
 }
 
 export const bossPhase = (enemy: Enemy) => enemy.hp <= enemy.maxHp * .3 ? 3 : enemy.hp <= enemy.maxHp * .65 ? 2 : 1;
+export const bossVulnerable = (enemy: Enemy) => enemy.st === 0 && enemy.n > 0;
 export interface Bullet { id: number; z: number; x: number; y: number; vx: number; vy: number; dmg: number; life: number; kind: string; side: 0 | 1; owner: number; pierce: boolean; grav: number; r: number; hits: number[] }
 export interface Prop extends Body { kind: 'crate' | 'barrel' | 'prisoner' | 'vehicle'; hp: number; drop?: WeaponId | 'food'; freed: number }
 export type Pickup = Body & ({ drop: WeaponId | 'food'; life: number } | { drop: 'record'; life: number; record: number });
@@ -529,6 +530,7 @@ export function damageEnemy(s: GameState, e: Enemy, dmg: number, kx: number, ky:
   if (e.hp <= 0) return;
   shotZ = e.z; s.lastHit = e.id;
   const boss = isBoss(e.type);
+  if (boss && bossVulnerable(e)) dmg *= 1.2;
   if (e.stun > 0) dmg *= p && CHARS[p.char].id === 'beto' ? 2 : 1.4;
   if (p && s.frenzy > 0) dmg *= 1.35;
   if (p && canCounter && p.counterT > 0) {
@@ -692,7 +694,6 @@ function stepEnemy(s: GameState, e: Enemy, lv: Level) {
     if (!boss && (e.type !== 'exploder' || e.st === 0)) e.face = dx >= 0 ? 1 : -1;
     if (e.cd > 0) e.cd--;
     if (!boss && e.type !== 'turret') { e.z += Math.max(-1.3, Math.min(1.3, tgt.z - e.z)); shotZ = e.z; }
-    if (boss) shotZ = tgt.z; // Los jefes apuntan al carril de su objetivo.
     const walk = (v: number) => { const want = e.face * v; e.vx += (want - e.vx) * .2; const ax = e.x + e.face * (e.w / 2 + 6); if (e.ground && surfaceAt(lv, ax, e.y - 2) === null && !offscreen) e.vx = 0; };
     // Nadie se queda esperando fuera de cámara: entra sí o sí.
     if (offscreen && !d.fly && !boss) { e.face = e.x > s.camX + W / 2 ? -1 : 1; e.vx += (e.face * 2.6 - e.vx) * .2; }
