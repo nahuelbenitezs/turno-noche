@@ -16,7 +16,7 @@ const ENEMY_ROW: Partial<Record<EnemyType, number>> = { grunt: 0, rusher: 1, fly
 const ENEMY_H: Record<string, number> = { grunt: 88, rusher: 66, flyer: 60, shield: 92, lobber: 90, turret: 70, exploder: 62, heavy: 128, camion: 190, grua: 170, loco: 170, colmena: 340, gerenta: 170 };
 const OBJ = { crate: 0, barrel: 1, prisoner: 2, vehicle: 3, food: 4, caja: 5, metra: 6, escopeta: 7, cohete: 8, fuego: 9, laser: 10, bala: 11, jeringa: 12, misil: 13, harina: 14, orbe: 15, granada: 16 } as const;
 const OBJ_SIZE: Record<string, number> = { crate: 46, barrel: 56, prisoner: 62, vehicle: 92 };
-const FX = { slash: 0, spark: 1, boom: 2, dust: 3, fire: 4, heal: 5 };
+const FX = { spark: 1, dust: 3, fire: 4, heal: 5 };
 const heroFrame = (r: number, c: number) => r * 6 + c;
 
 interface Part { s: Sprite; vx: number; vy: number; g: number; life: number; max: number; spin: number; grow: number; alpha?: number; frames?: Texture[]; delay?: number }
@@ -550,19 +550,77 @@ export class Renderer {
     while (this.floats.length > 5) this.floats.shift()!.t.destroy();
   }
   fx(e: Ev, s: GameState) {
+    if (e.k === 'levelstart' && this.levelDrawn !== s.levelIdx) {
+      this.drawLevel(s.levelIdx);
+      this.objs.forEach(o => o.destroy()); this.objs.clear(); this.camShown = s.camX;
+    }
+    const nearestPlayer = () => {
+      let value: Player | undefined, radius = 70;
+      for (const p of s.players) {
+        const distance = Math.hypot(p.x - e.x, screenY(p.y, p.z) - e.y);
+        if (p.joined && !p.out && distance <= radius) { radius = distance; value = p; }
+      }
+      return value;
+    };
     switch (e.k) {
-      case 'shot': this.spawn(e.x, e.y, e.s === 'fuego' ? 0xff9f1c : 0xfff1a8, { tex: this.glow, size: e.s === 'cohete' ? 1 : .6, life: 5, v: 0, add: true }); break;
-      case 'hit': this.fxSprite(FX.spark, e.x, e.y, 34, 7); break;
-      case 'melee': this.fxSprite(FX.slash, e.x, e.y - 38, e.a === 2 ? 100 : 70, 9); break;
-      case 'mhit': this.fxSprite(FX.spark, e.x, e.y, 76, 10, { grow: .008 }); for (let i = 0; i < 6; i++) this.spawn(e.x, e.y, CHUNK[i % 2], { size: .8, life: 16, v: 8 }); this.zoomPunch = Math.max(this.zoomPunch, .012); if ((e.a ?? 0) >= 12) this.floatText(e.x - s.camX, e.y - 26, String(e.a), 0xffe27a, 20); break;
+      case 'shot': {
+        const color = e.s === 'jeringa' ? 0x85ffc7 : e.s === 'laser' ? 0xa7adff : 0xffd575;
+        this.spawn(e.x, e.y, color, { tex: this.glow, size: e.s === 'cohete' ? 1 : .6, life: 5, v: 0, add: true });
+        this.sparks(e.x, e.y, 3, color, 5, e.a ?? 0);
+        break;
+      }
+      case 'eshot': this.spawn(e.x, e.y, 0xff8e77, { tex: this.glow, size: .49, life: 5, v: 0, add: true }); break;
+      case 'hit': this.animated('impact', e.x, e.y, 41, 8, 0xffe3b8); break;
+      case 'melee': {
+        const p = nearestPlayer();
+        const face = p?.face ?? 1, color = p ? CHARS[p.char].color : 0xafe6ff;
+        this.animated('slash', e.x + face * 24, e.y - 36, e.a === 2 ? 127 : 103, 12, color, face);
+        break;
+      }
+      case 'mhit':
+        this.animated('impact', e.x, e.y, 87, 10, 0xffebe0);
+        this.sparks(e.x, e.y, 8, 0xffc37c);
+        this.zoomPunch = Math.max(this.zoomPunch, .012);
+        if ((e.a ?? 0) >= 12) this.floatText(e.x - s.camX, e.y - 26, String(e.a), 0xffe27a, 20);
+        break;
       case 'die': this.corpse(e); this.fxSprite(FX.spark, e.x, e.y, 60, 8); for (let i = 0; i < 8; i++) this.spawn(e.x, e.y, CHUNK[i % CHUNK.length], { size: 1, life: 30, v: 7, g: .32, vy: -3 }); break;
       case 'boom': this.boom(e.x, e.y, e.a ?? 80); break;
-      case 'dust': case 'land': case 'jump': case 'jump2': case 'dash': this.fxSprite(FX.dust, e.x, e.y - 8, e.k === 'land' ? 58 : 38, 14, { vy: -.3 }); break;
-      case 'parry': this.fxSprite(FX.slash, e.x, e.y, 70, 8); this.floatText(e.x - s.camX, e.y, '¡DEVUELTA!', 0x7fe8ff, 18); break;
+      case 'dust':
+        if (!this.reducedMotion) this.spawn(e.x, e.y - 3, THEME_LIGHT[LEVELS[s.levelIdx].theme], {
+          tex: this.animation.smoke, size: .54, life: 16, v: .45, vy: -.5, grow: .012,
+        });
+        break;
+      case 'land': case 'jump': case 'jump2':
+        this.fxSprite(FX.dust, e.x, e.y - 8, e.k === 'land' ? 57 : 37, 12, { vy: -.3 });
+        if (e.k === 'jump2') this.animated('blast', e.x, e.y, 52, 13, 0xb8eaff);
+        break;
+      case 'dash': {
+        const p = nearestPlayer(), color = p ? CHARS[p.char].color : 0xb8eaff;
+        this.animated('blast', e.x, e.y - 15, 56, 13, color);
+        this.sparks(e.x, e.y - 17, 6, color, 7, p ? Math.atan2(-p.dashZ, -p.dashX) : Math.PI);
+        break;
+      }
+      case 'parry':
+        this.animated('impact', e.x, e.y, 92, 12, 0xa9eeff);
+        this.sparks(e.x, e.y, 10, 0x7fe8ff, 8);
+        this.floatText(e.x - s.camX, e.y, '¡DEVUELTA!', 0x7fe8ff, 18);
+        break;
       case 'dodge':
-        this.fxSprite(FX.slash, e.x, e.y, 88, 13);
+        this.animated('blast', e.x, e.y, 116, 18, 0x75e8ff);
         this.spawn(e.x, e.y, 0x75e8ff, { tex: this.glow, size: 2, life: 15, v: 0, add: true });
-        this.floatText(e.x - s.camX, e.y - 30, '¡NI ME ROZÓ! +25', 0x8aeaff, 20); break;
+        this.floatText(e.x - s.camX, e.y - 30, '¡ESQUIVA PERFECTA!', 0x8aeaff, 20); break;
+      case 'counter': case 'teamhit': {
+        const color = e.k === 'counter' ? 0x8aeaff : 0xffcd85;
+        this.animated('blast', e.x, e.y, 170, 24, color);
+        this.sparks(e.x, e.y, 14, color, 10);
+        this.floatText(e.x - s.camX, e.y - 65, e.s ?? '', color, 22);
+        break;
+      }
+      case 'record':
+        this.animated('blast', e.x, e.y, 120, 24, RECORD_COLOR);
+        this.sparks(e.x, e.y, 10, RECORD_COLOR, 4);
+        this.floatText(e.x - s.camX, e.y - 46, `${e.s ?? 'Archivo recuperado'} · ${e.a ?? 1}/3`, RECORD_COLOR, 20);
+        break;
       case 'grenade': this.spawn(e.x, e.y, 0x9fffd2, { tex: this.glow, size: .6, life: 9, v: 0, add: true }); break;
       case 'frenzy':
         this.flash.tint = 0xffd23f; this.flash.alpha = .16;
@@ -577,14 +635,30 @@ export class Renderer {
       case 'pickblocked': this.floatText(W / 2, 420, 'ESE TURNO YA ESTÁ OCUPADO', 0xffbd72, 20); break;
       case 'clang': case 'spark': for (let i = 0; i < 4; i++) this.spawn(e.x, e.y, 0xffe27a, { size: .5, life: 12, v: 5, g: .2 }); break;
       case 'crate': for (let i = 0; i < 9; i++) this.spawn(e.x, e.y, 0xb07a3f, { size: 1.3, life: 34, v: 6, g: .35, vy: -3 }); break;
-      case 'hurt': this.flash.tint = 0xff2030; this.flash.alpha = .18; this.fxSprite(FX.spark, e.x, e.y, 48, 7); break;
+      case 'hurt': this.flash.tint = 0xff2030; this.flash.alpha = .11; this.animated('impact', e.x, e.y, 57, 9, 0xff8f7d); break;
       case 'revive': this.fxSprite(FX.heal, e.x, e.y, 90, 34, { vy: -.6 }); break;
       case 'pickup': case 'rescue': for (let i = 0; i < 8; i++) this.spawn(e.x, e.y, 0xffe27a, { tex: this.glow, size: .35, life: 24, v: 3.2, vy: -1.5, add: true }); break;
-      case 'special': this.flash.tint = CHARS[e.a ?? 0].color; this.flash.alpha = .22; this.zoomPunch = .03; this.floatText(W / 2, 145, (e.s ?? '').toUpperCase() + '!', CHARS[e.a ?? 0].color, 44); break;
-      case 'bossdie': this.flash.tint = 0xffe6af; this.flash.alpha = .45; this.zoomPunch = .035; for (let i = 0; i < (this.lowFx ? 3 : 6); i++) this.boom(e.x + (Math.random() - .5) * 170, e.y + (Math.random() - .5) * 90, 90 + Math.random() * 60); break;
+      case 'special': {
+        const char = e.a ?? 0, color = CHARS[char].color;
+        const p = nearestPlayer();
+        if (p) this.rig(p).special = 24;
+        this.flash.tint = color; this.flash.alpha = .14; this.zoomPunch = .03;
+        this.animated('blast', e.x, e.y - 32, 200, 23, color);
+        if (char === 2) this.fxSprite(FX.heal, e.x, e.y - 56, 118, 33, { vy: -.7 });
+        if (char === 3) this.animated('blast', e.x, e.y - 45, 290, 23, color, 1, 8);
+        this.floatText(W / 2, 145, (e.s ?? '').toUpperCase(), color, 38);
+        break;
+      }
+      case 'bossdie':
+        this.flash.tint = 0xffe6af; this.flash.alpha = .19; this.zoomPunch = .035;
+        this.boom(e.x, e.y, 185);
+        if (!this.reducedMotion) for (let i = 0; i < (this.lowFx ? 2 : 5); i++) {
+          this.boom(e.x + (Math.random() - .5) * 150, e.y + (Math.random() - .5) * 90, 70 + Math.random() * 50, i * 5 + 4);
+        }
+        break;
       case 'boss': this.floatText(W / 2, 170, e.s ?? '', 0xff5a4e, 40); this.shakeExtra = 18; break;
       case 'bosswarn': this.floatText(W / 2, 220, '¡ATENCIÓN!', 0xffd23f, 50); break;
-      case 'bossphase': this.spawn(e.x, e.y, e.a === 3 ? 0xff553f : 0xffd23f, { tex: this.glow, size: 3, life: 25, v: 0, add: true }); break;
+      case 'bossphase': this.animated('blast', e.x, e.y, 230, 28, e.a === 3 ? 0xff7864 : 0xffd979); break;
       case 'warn': this.spawn(e.x, e.y, 0xff3030, { tex: this.glow, size: 1.6, life: 16, v: 0, add: true }); break;
       case 'text': this.floatText(e.x, e.y, e.s ?? '', 0xffe27a, 26); break;
       case 'levelstart': this.floatText(W / 2, 200, LEVELS[s.levelIdx].name, 0xffffff, 44); break;

@@ -113,7 +113,7 @@ function updateHud() {
   const lv = LEVELS[s.levelIdx];
   $('#mission-name').textContent = `0${s.levelIdx + 1} / ${lv.name}`;
   const arena = lv.arenas[s.arenaIdx];
-  const sector = lv.sections.findLast(section => section.x <= s.camX + W * .5);
+  const sector = lv.sections.filter(section => section.x <= s.camX + W * .5).at(-1);
   $('#mission-objective').textContent = s.bossId ? 'Derrotá al jefe' : s.arenaOn ? arena?.waveLabels?.[s.wave] ?? arena?.label ?? lv.objective : sector?.label ?? lv.objective;
   $('#mission-progress').style.width = `${Math.min(100, (s.camX + W) / lv.width * 100)}%`;
   $('#mission-records').textContent = `◇ ${countRecords(s)}/${MISSION_RECORDS[s.levelIdx].positions.length} · ${MISSION_RECORDS[s.levelIdx].name}`;
@@ -163,10 +163,21 @@ async function fullscreen() {
   try { if (document.fullscreenElement) await document.exitFullscreen(); else { await document.documentElement.requestFullscreen(); if (touchDevice) await (screen.orientation as ScreenOrientation & { lock?: (orientation: string) => Promise<void> }).lock?.('landscape'); } } catch { toast('Podés usar pantalla completa desde el menú del navegador.'); }
 }
 function cleanupNet() { netAttempt++; session?.close(); closeNet?.(); session = null; closeNet = null; guestLink = null; roomCode = ''; guestSlot = -1; netDown = false; lastSnapT = 0; pending = []; }
+function startLocal(mission?: number) {
+  s = createGame(); s.autoStart = false;
+  if (mission !== undefined) { s.levelIdx = mission; s.replay = true; }
+  mode = 'local'; paused = false; r.smooth = 1;
+  inp.reset(); inp.assign.clear(); inp.claimPrimary = false; clickBits = 0;
+}
 function action(a: string) {
   audio.unlock(); audio.play({ k: 'ui', x: 0, y: 0 });
+  if (/^replay-[0-4]$/.test(a)) {
+    const mission = Number(a.slice(7));
+    if (mode === 'menu' && (mission === 0 || medals[mission - 1] > 0)) startLocal(mission);
+    return;
+  }
   switch (a) {
-    case 'local': s = createGame(); s.autoStart = false; mode = 'local'; paused = false; r.smooth = 1; inp.reset(); inp.assign.clear(); inp.claimPrimary = false; break;
+    case 'local': startLocal(); break;
     case 'host': void startHost(); break;
     case 'join': menuView = 'join'; errorMsg = ''; break;
     case 'keys': menuView = 'keys'; break;
@@ -187,6 +198,53 @@ function action(a: string) {
     case 'invite': { const url = new URL(location.pathname, location.origin); url.searchParams.set('room', roomCode); if (navigator.clipboard) void navigator.clipboard.writeText(url.href).then(() => toast('Invitación copiada. Pasásela al equipo.'), () => toast(`Código de sala: ${roomCode}`)); else toast(`Código de sala: ${roomCode}`); break; }
     case 'reload': saveBest(); cleanupNet(); inp.reset(); inp.assign.clear(); inp.claimPrimary = false; clickBits = 0; s = createGame(); mode = 'menu'; paused = false; menuView = 'main'; errorMsg = ''; hud.hidden = touch.hidden = true; audio.playing = false; r.smooth = 1; break;
   }
+}
+const PAD_START = 1 << 12;
+const padHistory = new Map<number, number>();
+const menuBack = () => paused ? 'resume' : netDown || mode !== 'menu' ? 'reload' : menuView === 'creating' ? 'cancelnet' : menuView !== 'main' ? 'back' : '';
+function handleGamepads() {
+  const presses: { index: number; bits: number }[] = [];
+  const pads = navigator.getGamepads?.() ?? [];
+  const present = new Set<number>();
+  for (const pad of pads) {
+    if (!pad?.connected) continue;
+    const bits = gamepadBits(pad) | (pad.buttons[9]?.pressed ? PAD_START : 0);
+    const fresh = bits & ~(padHistory.get(pad.index) ?? 0);
+    padHistory.set(pad.index, bits); present.add(pad.index);
+    if (fresh) presses.push({ index: pad.index, bits: fresh });
+  }
+  for (const index of padHistory.keys()) if (!present.has(index)) padHistory.delete(index);
+  if (!presses.length) return;
+  if (mode !== 'menu' && !netDown && presses.some(p => p.bits & PAD_START)) {
+    if (paused || s.phase === 'play') { action(paused ? 'resume' : 'pause'); return; }
+    if (s.phase === 'select' && mode !== 'guest') { action('begin'); return; }
+  }
+  if (mode !== 'menu' && !paused && !netDown && !(s.replay && s.phase === 'clear')) return;
+  const press = presses.find(p => p.bits & (BTN.J | BTN.M | BTN.L | BTN.R | BTN.U | BTN.D));
+  if (!press) return;
+  const { bits, index } = press;
+  if (bits & BTN.M) { const back = menuBack(); if (back) { inp.blockPadButton(index, BTN.M); action(back); } return; }
+  const controls = [...ui.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter(el => el.getClientRects().length);
+  const current = controls.find(el => el === document.activeElement);
+  const first = controls.find(el => el.dataset.a === 'local') ?? controls[0];
+  if (bits & BTN.J) {
+    const target = current ?? first;
+    if (!target) return;
+    inp.blockPadButton(index, BTN.J);
+    if (target instanceof HTMLInputElement) target.focus(); else target.click();
+    return;
+  }
+  if (!current) { first?.focus(); return; }
+  const center = (el: HTMLElement) => { const box = el.getBoundingClientRect(); return [box.left + box.width / 2, box.top + box.height / 2]; };
+  const [x, y] = center(current), horizontal = !!(bits & (BTN.L | BTN.R));
+  const direction = bits & (BTN.L | BTN.U) ? -1 : 1;
+  let next: HTMLElement | undefined, distance = Infinity;
+  for (const control of controls) {
+    const [cx, cy] = center(control);
+    const ahead = (horizontal ? cx - x : cy - y) * direction, cross = Math.abs(horizontal ? cy - y : cx - x);
+    if (ahead > 4 && ahead + cross * 2 < distance) { next = control; distance = ahead + cross * 2; }
+  }
+  next?.focus({ preventScroll: true });
 }
 async function startHost() {
   cleanupNet(); const attempt = netAttempt; menuView = 'creating'; connecting = false; errorMsg = '';

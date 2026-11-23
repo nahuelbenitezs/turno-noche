@@ -25,7 +25,9 @@ const character = (value: unknown) => typeof value === 'number' && Number.isInte
 const natural = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const bossAttack = (value: unknown) => record(value)
   && ['charge', 'slam', 'sweep', 'salvo', 'signal', 'reinforcements'].includes(value.kind)
-  && typeof value.label === 'string' && numbers(value, ['x', 'w', 'z', 'depth', 'tell', 'duration']);
+  && ['charge', 'slam', 'sweep', 'mortar', 'fan', 'pulse', 'ring', 'swarm'].includes(value.pattern)
+  && typeof value.label === 'string' && numbers(value, ['x', 'w', 'z', 'depth', 'tell', 'duration', 'elapsed', 'dir', 'power', 'originX'])
+  && value.w > 0 && value.depth > 0 && value.tell > 0 && value.duration > 0 && value.elapsed >= 0;
 /** Nunca entrega un estado a medio validar: una foto dañada no reemplaza la partida. */
 export function decodeSnapshot(json: string): GameState {
   if (json.length > 1000000) throw new Error('Estado de sala demasiado grande.');
